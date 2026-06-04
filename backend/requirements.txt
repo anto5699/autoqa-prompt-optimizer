@@ -1,0 +1,14 @@
+fastapi>=0.111
+uvicorn[standard]
+langgraph>=0.2
+langchain-openai
+langchain-core
+openai
+pydantic>=2.7
+pydantic-settings
+pandas>=2.2
+sse-starlette
+pytest
+pytest-asyncio
+python-multipart
+httpx

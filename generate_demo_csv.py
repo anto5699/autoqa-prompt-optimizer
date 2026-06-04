@@ -1,0 +1,346 @@
+"""Generates demo_conversations.csv — a stakeholder demo dataset for the AutoQA Prompt Optimizer."""
+
+import csv
+import json
+import sys
+
+RULES = [
+    {
+        "rule_id": "rule_answer_1",
+        "rule_type": "answer",
+        "speaker": "agent",
+        "evaluation_type": "first",
+        "n_messages": 2,
+        "description": "The agent greeted the customer warmly",
+    },
+    {
+        "rule_id": "rule_trigger_2",
+        "rule_type": "trigger",
+        "speaker": "customer",
+        "evaluation_type": "entire",
+        "n_messages": 0,
+        "description": "The customer had a specific request",
+    },
+    {
+        "rule_id": "rule_answer_2",
+        "rule_type": "answer",
+        "speaker": "agent",
+        "evaluation_type": "entire",
+        "n_messages": 0,
+        "description": "The agent confirmed the customer's details",
+    },
+    {
+        "rule_id": "rule_answer_3",
+        "rule_type": "answer",
+        "speaker": "agent",
+        "evaluation_type": "last",
+        "n_messages": 2,
+        "description": "The call was wrapped up properly",
+    },
+]
+
+CONVERSATIONS = [
+    # conv_001: Order tracking — agent names self (Sarah), customer gives ORD-44218, agent repeats, AITAE ✓
+    {
+        "id": "conv_001",
+        "transcript": [
+            {"msg": "Thank you for calling ShopDirect. My name is Sarah, how can I help you today?", "messageId": 1, "speaker": "agent", "timestamp": 1700000000},
+            {"msg": "Hi, I'm trying to track my order. It's been a week and nothing's arrived.", "messageId": 2, "speaker": "customer", "timestamp": 1700000030},
+            {"msg": "I'm sorry to hear that! Could you give me your order number so I can look that up?", "messageId": 3, "speaker": "agent", "timestamp": 1700000060},
+            {"msg": "Yes, it's ORD-44218.", "messageId": 4, "speaker": "customer", "timestamp": 1700000090},
+            {"msg": "Thank you. I can see order ORD-44218 — it shows as dispatched but stuck at the regional hub. I'll raise an urgent trace with the courier right away.", "messageId": 5, "speaker": "agent", "timestamp": 1700000120},
+            {"msg": "How long will that take?", "messageId": 6, "speaker": "customer", "timestamp": 1700000150},
+            {"msg": "The trace typically resolves within 48 hours. Is there anything else I can help you with today?", "messageId": 7, "speaker": "agent", "timestamp": 1700000180},
+            {"msg": "No, that's all. Thanks.", "messageId": 8, "speaker": "customer", "timestamp": 1700000210},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "Yes",
+    },
+    # conv_002: Delivery delay — agent names self (James), customer gives REF-78201, agent repeats, AITAE ✓
+    {
+        "id": "conv_002",
+        "transcript": [
+            {"msg": "Hi, you've reached ShopDirect support. This is James speaking. How can I assist?", "messageId": 1, "speaker": "agent", "timestamp": 1700010000},
+            {"msg": "I ordered something five days ago and it still hasn't shipped. This is really frustrating.", "messageId": 2, "speaker": "customer", "timestamp": 1700010030},
+            {"msg": "I understand your frustration. Let me pull up your account. What's your order reference?", "messageId": 3, "speaker": "agent", "timestamp": 1700010060},
+            {"msg": "REF-78201.", "messageId": 4, "speaker": "customer", "timestamp": 1700010090},
+            {"msg": "I've got order REF-78201 here. It looks like there was a warehouse stock discrepancy that delayed fulfilment. The item has now been allocated and should ship today.", "messageId": 5, "speaker": "agent", "timestamp": 1700010120},
+            {"msg": "Okay, so when will it actually arrive?", "messageId": 6, "speaker": "customer", "timestamp": 1700010150},
+            {"msg": "You should receive it within 3 working days. Is there anything else I can help you with?", "messageId": 7, "speaker": "agent", "timestamp": 1700010180},
+            {"msg": "No, that covers it.", "messageId": 8, "speaker": "customer", "timestamp": 1700010210},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "Yes",
+    },
+    # conv_003: Wrong item — agent names self (Maria), customer gives TKT-22913, agent repeats, NO AITAE
+    {
+        "id": "conv_003",
+        "transcript": [
+            {"msg": "Hello, ShopDirect customer care. My name is Maria. How can I help?", "messageId": 1, "speaker": "agent", "timestamp": 1700020000},
+            {"msg": "I received the wrong item. I ordered blue trainers and got red ones.", "messageId": 2, "speaker": "customer", "timestamp": 1700020030},
+            {"msg": "Oh, I apologise for that mix-up! Can I get your order number please?", "messageId": 3, "speaker": "agent", "timestamp": 1700020060},
+            {"msg": "It's TKT-22913.", "messageId": 4, "speaker": "customer", "timestamp": 1700020090},
+            {"msg": "Got it — TKT-22913. I can see the correct blue trainers should have been dispatched. I'll arrange a free return label and re-send the right pair immediately.", "messageId": 5, "speaker": "agent", "timestamp": 1700020120},
+            {"msg": "Great, thank you so much.", "messageId": 6, "speaker": "customer", "timestamp": 1700020150},
+            {"msg": "You're very welcome! Have a great day.", "messageId": 7, "speaker": "agent", "timestamp": 1700020180},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "No",
+    },
+    # conv_004: Missing package — NO agent name, customer gives ORD-99341, agent repeats, AITAE ✓
+    {
+        "id": "conv_004",
+        "transcript": [
+            {"msg": "Thank you for calling ShopDirect. How can I help you today?", "messageId": 1, "speaker": "agent", "timestamp": 1700030000},
+            {"msg": "My package shows as delivered but it wasn't at my door. Order number is ORD-99341.", "messageId": 2, "speaker": "customer", "timestamp": 1700030030},
+            {"msg": "I'm sorry to hear that. Let me check ORD-99341 right away.", "messageId": 3, "speaker": "agent", "timestamp": 1700030060},
+            {"msg": "The courier marked it as left in a safe location. Did you check with a neighbour or in a porch?", "messageId": 4, "speaker": "agent", "timestamp": 1700030090},
+            {"msg": "Yes I checked everywhere. It's not there.", "messageId": 5, "speaker": "customer", "timestamp": 1700030120},
+            {"msg": "In that case I'll file a non-delivery claim and send a replacement or issue a full refund — whichever you prefer. Is there anything else I can help you with today?", "messageId": 6, "speaker": "agent", "timestamp": 1700030150},
+            {"msg": "A replacement please. That's all I need.", "messageId": 7, "speaker": "customer", "timestamp": 1700030180},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "Yes",
+    },
+    # conv_005: Overcharge — NO agent name, customer gives REF-11562, agent doesn't repeat it, AITAE ✓
+    {
+        "id": "conv_005",
+        "transcript": [
+            {"msg": "ShopDirect support, how may I assist you?", "messageId": 1, "speaker": "agent", "timestamp": 1700040000},
+            {"msg": "I was charged twice for my order. My reference is REF-11562.", "messageId": 2, "speaker": "customer", "timestamp": 1700040030},
+            {"msg": "Let me look into that for you. I can see a duplicate charge on your account — I'll process a full refund for the second payment immediately.", "messageId": 3, "speaker": "agent", "timestamp": 1700040060},
+            {"msg": "How long will the refund take?", "messageId": 4, "speaker": "customer", "timestamp": 1700040090},
+            {"msg": "It should appear within 5-7 business days depending on your bank. Is there anything else I can help you with today?", "messageId": 5, "speaker": "agent", "timestamp": 1700040120},
+            {"msg": "No, that's great. Thank you.", "messageId": 6, "speaker": "customer", "timestamp": 1700040150},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "No",
+        "rule_answer_3": "Yes",
+    },
+    # conv_006: Return policy — agent names self (David), NO order number, NA for rule_answer_2, AITAE ✓
+    {
+        "id": "conv_006",
+        "transcript": [
+            {"msg": "Good afternoon, ShopDirect. My name is David. How can I help?", "messageId": 1, "speaker": "agent", "timestamp": 1700050000},
+            {"msg": "Hi, I want to return something I bought last month. Is that still within the return window?", "messageId": 2, "speaker": "customer", "timestamp": 1700050030},
+            {"msg": "Our standard return window is 30 days from delivery. Could you let me know the delivery date?", "messageId": 3, "speaker": "agent", "timestamp": 1700050060},
+            {"msg": "It arrived on the 5th, so about 28 days ago.", "messageId": 4, "speaker": "customer", "timestamp": 1700050090},
+            {"msg": "Great news — you're still within the 30-day window. I'll send you a prepaid return label to your email address now.", "messageId": 5, "speaker": "agent", "timestamp": 1700050120},
+            {"msg": "Perfect, thank you.", "messageId": 6, "speaker": "customer", "timestamp": 1700050150},
+            {"msg": "Of course! Is there anything else I can help you with today?", "messageId": 7, "speaker": "agent", "timestamp": 1700050180},
+            {"msg": "No, that's all.", "messageId": 8, "speaker": "customer", "timestamp": 1700050210},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "Yes",
+    },
+    # conv_007: Product availability — agent names self (Lisa), NO order number, NA, AITAE ✓
+    {
+        "id": "conv_007",
+        "transcript": [
+            {"msg": "Hi there, this is Lisa from ShopDirect. How can I assist?", "messageId": 1, "speaker": "agent", "timestamp": 1700060000},
+            {"msg": "I'm looking for the XR Pro headphones in black. Are they back in stock?", "messageId": 2, "speaker": "customer", "timestamp": 1700060030},
+            {"msg": "Let me check the inventory for you. The black XR Pro is currently out of stock but we're expecting a restock within 2 weeks.", "messageId": 3, "speaker": "agent", "timestamp": 1700060060},
+            {"msg": "Can I pre-order them?", "messageId": 4, "speaker": "customer", "timestamp": 1700060090},
+            {"msg": "Absolutely! I can set up a pre-order now and you'll be automatically charged and shipped as soon as stock arrives.", "messageId": 5, "speaker": "agent", "timestamp": 1700060120},
+            {"msg": "Yes please, let's do that.", "messageId": 6, "speaker": "customer", "timestamp": 1700060150},
+            {"msg": "Done! Is there anything else I can help you with today?", "messageId": 7, "speaker": "agent", "timestamp": 1700060180},
+            {"msg": "Nope, that's everything!", "messageId": 8, "speaker": "customer", "timestamp": 1700060210},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "Yes",
+    },
+    # conv_008: Password reset — NO agent name, NO order number, NA, NO AITAE
+    {
+        "id": "conv_008",
+        "transcript": [
+            {"msg": "ShopDirect support, how can I help?", "messageId": 1, "speaker": "agent", "timestamp": 1700070000},
+            {"msg": "I can't log into my account. I keep getting an error.", "messageId": 2, "speaker": "customer", "timestamp": 1700070030},
+            {"msg": "I can help you with that. Let me send a password reset link to your registered email address.", "messageId": 3, "speaker": "agent", "timestamp": 1700070060},
+            {"msg": "Done — you should receive it within a minute.", "messageId": 4, "speaker": "agent", "timestamp": 1700070090},
+            {"msg": "Got it, I can log in now. Thanks.", "messageId": 5, "speaker": "customer", "timestamp": 1700070120},
+            {"msg": "Great, glad we got that sorted for you!", "messageId": 6, "speaker": "agent", "timestamp": 1700070150},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "No",
+    },
+    # conv_009: Refund status — agent names self (Tom), customer gives ORD-55783, agent DOESN'T repeat it, NO AITAE
+    {
+        "id": "conv_009",
+        "transcript": [
+            {"msg": "Hello, this is Tom at ShopDirect support. How can I help?", "messageId": 1, "speaker": "agent", "timestamp": 1700080000},
+            {"msg": "I returned something two weeks ago and still haven't got my refund. Order was ORD-55783.", "messageId": 2, "speaker": "customer", "timestamp": 1700080030},
+            {"msg": "I'm sorry for the delay. I can see the return was received and the refund was approved — it looks like it's still processing on the payment side.", "messageId": 3, "speaker": "agent", "timestamp": 1700080060},
+            {"msg": "That's taking way too long. Can you escalate it?", "messageId": 4, "speaker": "customer", "timestamp": 1700080090},
+            {"msg": "Absolutely, I'll flag this as a priority with our payments team right now. You should see the refund within 24-48 hours.", "messageId": 5, "speaker": "agent", "timestamp": 1700080120},
+            {"msg": "Okay, thank you.", "messageId": 6, "speaker": "customer", "timestamp": 1700080150},
+            {"msg": "You're welcome. Have a good day.", "messageId": 7, "speaker": "agent", "timestamp": 1700080180},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "No",
+        "rule_answer_3": "No",
+    },
+    # conv_010: Shipping question — NO agent name, NO order number, NA, AITAE ✓
+    {
+        "id": "conv_010",
+        "transcript": [
+            {"msg": "Thank you for calling ShopDirect. How can I help you today?", "messageId": 1, "speaker": "agent", "timestamp": 1700090000},
+            {"msg": "Hi, do you ship to Ireland and what are the delivery times?", "messageId": 2, "speaker": "customer", "timestamp": 1700090030},
+            {"msg": "Yes, we ship to Ireland! Standard delivery takes 5-7 working days and express is 2-3 days.", "messageId": 3, "speaker": "agent", "timestamp": 1700090060},
+            {"msg": "What are the shipping costs?", "messageId": 4, "speaker": "customer", "timestamp": 1700090090},
+            {"msg": "Standard shipping is £4.99 and express is £9.99. Orders over £50 get free standard shipping.", "messageId": 5, "speaker": "agent", "timestamp": 1700090120},
+            {"msg": "That's helpful, thank you.", "messageId": 6, "speaker": "customer", "timestamp": 1700090150},
+            {"msg": "My pleasure! Is there anything else I can help you with today?", "messageId": 7, "speaker": "agent", "timestamp": 1700090180},
+            {"msg": "No, that's perfect.", "messageId": 8, "speaker": "customer", "timestamp": 1700090210},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "Yes",
+    },
+    # conv_011: Damaged product — agent names self (Rachel), customer gives REF-88213, agent repeats, AITAE ✓
+    {
+        "id": "conv_011",
+        "transcript": [
+            {"msg": "ShopDirect customer support, my name is Rachel. How can I help you?", "messageId": 1, "speaker": "agent", "timestamp": 1700100000},
+            {"msg": "Hi Rachel, I received a damaged item. The box was completely crushed.", "messageId": 2, "speaker": "customer", "timestamp": 1700100030},
+            {"msg": "Oh, I'm really sorry about that. Could I get your reference number to pull up the order?", "messageId": 3, "speaker": "agent", "timestamp": 1700100060},
+            {"msg": "It's REF-88213.", "messageId": 4, "speaker": "customer", "timestamp": 1700100090},
+            {"msg": "Thank you. I have REF-88213 here. I can see the item — I'll arrange a replacement to be sent out with express delivery at no charge.", "messageId": 5, "speaker": "agent", "timestamp": 1700100120},
+            {"msg": "Do I need to send the damaged one back?", "messageId": 6, "speaker": "customer", "timestamp": 1700100150},
+            {"msg": "Not at all for damaged goods — you can dispose of it. Is there anything else I can help you with today?", "messageId": 7, "speaker": "agent", "timestamp": 1700100180},
+            {"msg": "No, that's brilliant. Thank you!", "messageId": 8, "speaker": "customer", "timestamp": 1700100210},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "Yes",
+    },
+    # conv_012: Duplicate charge — NO agent name, customer gives TKT-33418, agent repeats, AITAE ✓
+    {
+        "id": "conv_012",
+        "transcript": [
+            {"msg": "Thank you for contacting ShopDirect. How may I assist you?", "messageId": 1, "speaker": "agent", "timestamp": 1700110000},
+            {"msg": "I've been charged twice for the same order. Can you look at ticket TKT-33418?", "messageId": 2, "speaker": "customer", "timestamp": 1700110030},
+            {"msg": "Of course. Looking at TKT-33418 now — yes, I can see the double charge here. I'll refund the duplicate payment immediately.", "messageId": 3, "speaker": "agent", "timestamp": 1700110060},
+            {"msg": "How long until it's back in my account?", "messageId": 4, "speaker": "customer", "timestamp": 1700110090},
+            {"msg": "3 to 5 business days, depending on your bank. Is there anything else I can help you with today?", "messageId": 5, "speaker": "agent", "timestamp": 1700110120},
+            {"msg": "Nope, that's sorted it. Cheers.", "messageId": 6, "speaker": "customer", "timestamp": 1700110150},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "Yes",
+        "rule_answer_3": "Yes",
+    },
+    # conv_013: Promo code — agent names self (Kevin), NO order number (promo code ≠ order ref), NA, NO AITAE
+    {
+        "id": "conv_013",
+        "transcript": [
+            {"msg": "Good morning! My name is Kevin, ShopDirect support. What can I help with?", "messageId": 1, "speaker": "agent", "timestamp": 1700120000},
+            {"msg": "Hi, I have a 20% discount code but it keeps saying invalid at checkout.", "messageId": 2, "speaker": "customer", "timestamp": 1700120030},
+            {"msg": "Let me look into that. Could you tell me the promo code?", "messageId": 3, "speaker": "agent", "timestamp": 1700120060},
+            {"msg": "It's SAVE20.", "messageId": 4, "speaker": "customer", "timestamp": 1700120090},
+            {"msg": "I can see SAVE20 in our system — it looks like it expired last Sunday. I can apply a one-time 20% discount directly to your next order as a goodwill gesture.", "messageId": 5, "speaker": "agent", "timestamp": 1700120120},
+            {"msg": "Oh, that would be great. Thank you so much.", "messageId": 6, "speaker": "customer", "timestamp": 1700120150},
+            {"msg": "Done! I've added a note to your account. Enjoy your shopping!", "messageId": 7, "speaker": "agent", "timestamp": 1700120180},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "No",
+    },
+    # conv_014: Address change — agent names self (Amy), customer gives ORD-71924, agent DOESN'T repeat it, AITAE ✓
+    {
+        "id": "conv_014",
+        "transcript": [
+            {"msg": "Hello, this is Amy from ShopDirect. How can I help you today?", "messageId": 1, "speaker": "agent", "timestamp": 1700130000},
+            {"msg": "Hi, I need to change the delivery address for an order I just placed. Order number ORD-71924.", "messageId": 2, "speaker": "customer", "timestamp": 1700130030},
+            {"msg": "I can try to help with that — address changes are only possible if the order hasn't been picked yet. Let me check the status.", "messageId": 3, "speaker": "agent", "timestamp": 1700130060},
+            {"msg": "The order is still in processing, so we're in time. What's the new address?", "messageId": 4, "speaker": "agent", "timestamp": 1700130090},
+            {"msg": "It's 14 Oak Street, Bristol, BS1 4LT.", "messageId": 5, "speaker": "customer", "timestamp": 1700130120},
+            {"msg": "I've updated the delivery address to 14 Oak Street, Bristol, BS1 4LT. You'll get a confirmation email shortly. Is there anything else I can help you with today?", "messageId": 6, "speaker": "agent", "timestamp": 1700130150},
+            {"msg": "No, that's everything. Thanks Amy!", "messageId": 7, "speaker": "customer", "timestamp": 1700130180},
+        ],
+        "rule_answer_1": "Yes",
+        "rule_trigger_2": "Yes",
+        "rule_answer_2": "No",
+        "rule_answer_3": "Yes",
+    },
+    # conv_015: Payment method — NO agent name, NO order number, NA, NO AITAE
+    {
+        "id": "conv_015",
+        "transcript": [
+            {"msg": "ShopDirect support, how can I help?", "messageId": 1, "speaker": "agent", "timestamp": 1700140000},
+            {"msg": "Hi, do you accept PayPal at checkout?", "messageId": 2, "speaker": "customer", "timestamp": 1700140030},
+            {"msg": "Yes, we accept PayPal along with Visa, Mastercard, Amex, and Apple Pay.", "messageId": 3, "speaker": "agent", "timestamp": 1700140060},
+            {"msg": "What about buy now pay later?", "messageId": 4, "speaker": "customer", "timestamp": 1700140090},
+            {"msg": "We partner with Klarna so you can split payments over 3 or 6 months with no interest.", "messageId": 5, "speaker": "agent", "timestamp": 1700140120},
+            {"msg": "Perfect, that's all I needed. Goodbye.", "messageId": 6, "speaker": "customer", "timestamp": 1700140150},
+            {"msg": "Goodbye! Have a great day.", "messageId": 7, "speaker": "agent", "timestamp": 1700140180},
+        ],
+        "rule_answer_1": "No",
+        "rule_trigger_2": "No",
+        "rule_answer_2": "NA",
+        "rule_answer_3": "No",
+    },
+]
+
+
+def build_rows() -> list[dict]:
+    rows = []
+    for conv in CONVERSATIONS:
+        transcript_json = json.dumps(conv["transcript"], ensure_ascii=False)
+        for rule in RULES:
+            rid = rule["rule_id"]
+            rows.append({
+                "conversation_id": conv["id"],
+                "transcript": transcript_json,
+                "rule_id": rid,
+                "rule_type": rule["rule_type"],
+                "speaker": rule["speaker"],
+                "evaluation_type": rule["evaluation_type"],
+                "n_messages": rule["n_messages"],
+                "description": rule["description"],
+                "ground_truth": conv[rid],
+            })
+    return rows
+
+
+def main():
+    output_path = "demo_conversations.csv"
+    rows = build_rows()
+    fieldnames = ["conversation_id", "transcript", "rule_id", "rule_type", "speaker", "evaluation_type", "n_messages", "description", "ground_truth"]
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Written {len(rows)} rows ({len(CONVERSATIONS)} conversations × {len(RULES)} rules) to {output_path}")
+
+    # Print ground truth summary
+    print("\nGround truth summary:")
+    for rule in RULES:
+        rid = rule["rule_id"]
+        yes = sum(1 for c in CONVERSATIONS if c[rid] == "Yes")
+        no = sum(1 for c in CONVERSATIONS if c[rid] == "No")
+        na = sum(1 for c in CONVERSATIONS if c[rid] == "NA")
+        evaluable = yes + no
+        print(f"  {rid}: Yes={yes} No={no} NA={na} (evaluable={evaluable})")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Test data (large generated files)
+test_strategized.csv
+test_strategized_v2.csv
+test.csv

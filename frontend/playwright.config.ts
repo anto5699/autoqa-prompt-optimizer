@@ -7,7 +7,7 @@ dotenv.config({ path: path.join(__dirname, '../backend/.env') });
 
 export default defineConfig({
   testDir: './e2e/tests',
-  timeout: 5 * 60 * 1000,        // 5 min per test — real LLM calls
+  timeout: 10 * 60 * 1000,       // 10 min per test — real LLM calls + optional clarification round
   expect: { timeout: 30_000 },
   fullyParallel: false,
   retries: 0,

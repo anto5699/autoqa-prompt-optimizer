@@ -11,8 +11,8 @@ from api.schemas.report import FinalReport, ReportInProgressResponse
 from api.schemas.session import (
     CreateSessionResponse,
     ErrorResponse,
+    ParameterInfo,
     ParameterSummary,
-    RuleInfo,
     SessionStatusResponse,
     SubmitAnswersRequest,
     SubmitAnswersResponse,
@@ -31,8 +31,6 @@ async def _run_graph(session_id: str, initial_state: OptimizationState) -> None:
     config = {"configurable": {"thread_id": session_id}}
     try:
         await graph_app.ainvoke(initial_state, config=config)
-        # When interrupt() fires, ainvoke returns normally (LangGraph catches GraphInterrupt
-        # internally). state.next is non-empty when the graph is paused — don't mark complete.
         state = graph_app.get_state(config)
         if state and state.next:
             logger.info("session=%s graph paused at interrupt, pending: %s", session_id, state.next)
@@ -49,6 +47,9 @@ async def create_session(
     max_iterations: int = Form(8),
     accuracy_target: float = Form(0.90),
     language: str = Form("en"),
+    model_name: str = Form(""),
+    api_key_override: str = Form(""),
+    base_url: str = Form(""),
 ) -> CreateSessionResponse:
     if max_iterations < 1 or max_iterations > 10:
         raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
@@ -58,7 +59,7 @@ async def create_session(
     csv_bytes = await file.read()
 
     try:
-        conversations, rules, ground_truth_map, excluded_rules = parse(csv_bytes)
+        conversations, metric_names, ground_truth_map, excluded_parameters, na_detected_parameters = parse(csv_bytes)
     except CSVParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -72,35 +73,34 @@ async def create_session(
         "clarifying_questions": [],
         "parameter_summary": {},
         "progress_log": [],
-        "_rules": rules,
+        "_metric_names": metric_names,
+        "_na_detected_parameters": na_detected_parameters,
         "_conversations": conversations,
         "_ground_truth_map": ground_truth_map,
-        "_excluded_rules": excluded_rules,
+        "_excluded_rules": excluded_parameters,
         "_max_iterations": max_iterations,
         "_accuracy_target": accuracy_target,
         "_language": language,
+        "_llm_config": {"model": model_name, "api_key": api_key_override, "base_url": base_url},
     })
 
-    rule_infos = [
-        RuleInfo(
-            rule_id=r["rule_id"],
-            rule_type=r["rule_type"],
-            speaker=r["speaker"],
-            evaluation_type=r["evaluation_type"],
-            n_messages=r["n_messages"],
+    parameter_infos = [
+        ParameterInfo(
+            parameter_name=name,
+            has_na=name in na_detected_parameters,
         )
-        for r in rules
+        for name in metric_names
     ]
 
     logger.info(
-        "session=%s created: %d rules, %d conversations",
-        session_id, len(rules), len(conversations),
+        "session=%s created: %d metrics, %d conversations",
+        session_id, len(metric_names), len(conversations),
     )
 
     return CreateSessionResponse(
         session_id=session_id,
-        rules_detected=rule_infos,
-        excluded_rules=excluded_rules,
+        parameters_detected=parameter_infos,
+        excluded_parameters=excluded_parameters,
         conversation_count=len(conversations),
     )
 
@@ -113,23 +113,62 @@ async def submit_descriptions(session_id: str, body: SubmitDescriptionsRequest) 
     if session.get("current_phase") != "awaiting_descriptions":
         raise HTTPException(status_code=409, detail="Session is not awaiting descriptions")
 
-    rules = session["_rules"]
-    rules_with_desc = [
-        {**r, "description": body.descriptions.get(r["rule_id"], "")}
-        for r in rules
-    ]
+    original_gt_map = session["_ground_truth_map"]
+
+    rules: list[dict] = []
+    expanded_gt_map: dict[str, dict[str, str]] = {conv_id: {} for conv_id in original_gt_map}
+
+    for metric_name, config in body.descriptions.items():
+        answer_desc = config.answer_description.strip()
+        if config.type == "static":
+            rules.append({
+                "rule_id": metric_name,
+                "rule_type": "answer",
+                "speaker": "agent",
+                "evaluation_type": "entire",
+                "n_messages": 0,
+                "description": answer_desc,
+            })
+            for conv_id, metric_gts in original_gt_map.items():
+                expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
+        else:  # dynamic
+            trigger_desc = (config.trigger_description or "").strip()
+            trigger_id = f"{metric_name}__trigger"
+            answer_id = f"{metric_name}__answer"
+            rules.append({
+                "rule_id": trigger_id,
+                "rule_type": "trigger",
+                "speaker": "agent",
+                "evaluation_type": "entire",
+                "n_messages": 0,
+                "description": trigger_desc,
+            })
+            rules.append({
+                "rule_id": answer_id,
+                "rule_type": "answer",
+                "speaker": "agent",
+                "evaluation_type": "entire",
+                "n_messages": 0,
+                "description": answer_desc,
+            })
+            for conv_id, metric_gts in original_gt_map.items():
+                original_gt = metric_gts.get(metric_name, "NA")
+                expanded_gt_map[conv_id][trigger_id] = "No" if original_gt == "NA" else "Yes"
+                expanded_gt_map[conv_id][answer_id] = original_gt
 
     initial_state: OptimizationState = {
         "session_id": session_id,
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
         "language": session["_language"],
+        "llm_config": session.get("_llm_config", {}),
         "conversations": session["_conversations"],
-        "rules": rules_with_desc,
-        "ground_truth_map": session["_ground_truth_map"],
+        "rules": rules,
+        "ground_truth_map": expanded_gt_map,
         "excluded_rules": session["_excluded_rules"],
         "clarifying_questions": [],
         "user_answers": {},
         "clarification_complete": False,
+        "clarified_rule_ids": [],
         "current_iteration": 0,
         "max_iterations": session["_max_iterations"],
         "accuracy_target": session["_accuracy_target"],
@@ -162,9 +201,6 @@ async def get_session(session_id: str) -> SessionStatusResponse:
 
     store_phase = session.get("current_phase", "awaiting_descriptions")
     live_phase = live.get("current_phase", "")
-    # session_store is authoritative: each node writes its phase at start, and ambiguity_detection
-    # writes "awaiting_clarification" before calling interrupt() (LangGraph state.values won't
-    # reflect interrupt; questions live in state.tasks, not state.values).
     phase = store_phase if store_phase else live_phase
     iteration = live.get("current_iteration", session.get("current_iteration", 0))
     questions = live.get("clarifying_questions") or session.get("clarifying_questions", [])
@@ -177,22 +213,20 @@ async def get_session(session_id: str) -> SessionStatusResponse:
             status=record.get("status", "pending"),
         )
 
-    rule_infos = [
-        RuleInfo(
-            rule_id=r["rule_id"],
-            rule_type=r["rule_type"],
-            speaker=r["speaker"],
-            evaluation_type=r["evaluation_type"],
-            n_messages=r["n_messages"],
+    na_detected = set(session.get("_na_detected_parameters", []))
+    parameter_infos = [
+        ParameterInfo(
+            parameter_name=name,
+            has_na=name in na_detected,
         )
-        for r in session.get("_rules", [])
+        for name in session.get("_metric_names", [])
     ]
 
     return SessionStatusResponse(
         session_id=session_id,
         current_phase=phase,
         current_iteration=iteration,
-        rules=rule_infos,
+        parameters=parameter_infos,
         clarifying_questions=questions,
         parameter_summary=parameter_summary,
         progress_log=progress,

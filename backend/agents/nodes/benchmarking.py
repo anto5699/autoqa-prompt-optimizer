@@ -7,6 +7,28 @@ from utils.session_store import session_store
 logger = logging.getLogger(__name__)
 
 
+def _apply_trigger_gating(
+    rule_id: str,
+    predictions: dict,
+    records: dict,
+) -> dict:
+    """For __answer rules, override prediction to 'NA' where the paired __trigger fired 'No'."""
+    if not rule_id.endswith("__answer"):
+        return predictions
+
+    trigger_id = rule_id[: -len("__answer")] + "__trigger"
+    trigger_record = records.get(trigger_id)
+    if trigger_record is None:
+        return predictions
+
+    trigger_preds = trigger_record.get("current_predictions", {})
+    gated = dict(predictions)
+    for conv_id, trigger_pred in trigger_preds.items():
+        if trigger_pred == "No":
+            gated[conv_id] = "NA"
+    return gated
+
+
 async def benchmarking(state: OptimizationState) -> dict:
     logger.info(
         "session=%s phase=benchmarking iteration=%d",
@@ -33,7 +55,8 @@ async def benchmarking(state: OptimizationState) -> dict:
             )
             continue
 
-        metrics = compute_metrics(record["current_predictions"], ground_truth_map, rule_id)
+        predictions = _apply_trigger_gating(rule_id, record["current_predictions"], records)
+        metrics = compute_metrics(predictions, ground_truth_map, rule_id)
         new_accuracy = metrics["accuracy"]
 
         # First pass: seed regression tracking
@@ -97,7 +120,8 @@ async def benchmarking(state: OptimizationState) -> dict:
         log_lines.append(
             f"Iteration {current_iteration} | {rule_id}: "
             f"accuracy={new_accuracy:.2%} "
-            f"(TP={metrics['tp']} TN={metrics['tn']} FP={metrics['fp']} FN={metrics['fn']})"
+            f"(TP={metrics['tp']} TN={metrics['tn']} FP={metrics['fp']} FN={metrics['fn']} "
+            f"NA✓={metrics['na_correct']} NA✗={metrics['na_wrong']})"
         )
         logger.info(
             "session=%s rule_id=%s iteration=%d accuracy=%.4f",

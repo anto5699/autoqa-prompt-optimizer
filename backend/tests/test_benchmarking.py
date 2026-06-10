@@ -138,3 +138,83 @@ def test_zero_best_accuracy_not_treated_as_none():
     # 0.0 is NOT a regression vs best of 0.0 — do not revert
     assert r["current_description"] == "desc v2"
     assert r["best_description"] == "desc v2"  # 0.0 == 0.0, so update best to current
+
+
+# ── trigger-gating ────────────────────────────────────────────────────────────
+
+def _trigger_record(predictions, *, status="optimizing", current_accuracy=0.0):
+    return {
+        "rule_id": "metric__trigger",
+        "rule_type": "trigger",
+        "speaker": "agent",
+        "evaluation_type": "entire",
+        "n_messages": 0,
+        "current_description": "trigger desc",
+        "iteration_history": [],
+        "current_predictions": predictions,
+        "current_accuracy": current_accuracy,
+        "current_precision": 0.0,
+        "current_recall": 0.0,
+        "current_f1": 0.0,
+        "true_positives": 0,
+        "false_positives": 0,
+        "true_negatives": 0,
+        "false_negatives": 0,
+        "not_applicable_count": 0,
+        "rca_findings": None,
+        "optimization_notes": None,
+        "status": status,
+        "initial_accuracy": None,
+        "best_accuracy": None,
+        "best_description": None,
+    }
+
+
+def test_trigger_gating_overrides_answer_pred_to_na():
+    # trigger pred=No for c3 → answer pred should be gated to "NA"
+    # c3 GT is NA in answer rule (out-of-scope conversation)
+    # Without gating: pred=Yes vs GT=NA → na_wrong
+    # With gating: pred=NA vs GT=NA → na_correct
+    trigger_preds = {"c1": "Yes", "c2": "Yes", "c3": "No"}
+    answer_preds  = {"c1": "Yes", "c2": "No",  "c3": "Yes"}
+    gt = {
+        "c1": {"metric__trigger": "Yes", "metric__answer": "Yes"},
+        "c2": {"metric__trigger": "Yes", "metric__answer": "No"},
+        "c3": {"metric__trigger": "No",  "metric__answer": "NA"},
+    }
+    trigger_rec = _trigger_record(trigger_preds)
+    answer_rec  = _record("answer desc", answer_preds, initial_accuracy=None)
+    answer_rec["rule_id"] = "metric__answer"
+    trigger_rec["rule_id"] = "metric__trigger"
+
+    result = asyncio.run(benchmarking(_state(
+        {"metric__trigger": trigger_rec, "metric__answer": answer_rec},
+        gt, iteration=0, target=0.9
+    )))
+
+    r = result["parameter_records"]["metric__answer"]
+    # c1=TP, c2=TN, c3=na_correct (gated) → 3/3 = 1.0
+    assert r["current_accuracy"] == pytest.approx(1.0)
+
+
+def test_non_answer_rule_not_gated():
+    preds = {"c1": "Yes", "c2": "No"}
+    gt = {"c1": {"r1": "Yes"}, "c2": {"r1": "No"}}
+    record = _record("desc", preds, initial_accuracy=None)
+    result = asyncio.run(benchmarking(_state({"r1": record}, gt, iteration=0)))
+    r = result["parameter_records"]["r1"]
+    assert r["current_accuracy"] == pytest.approx(1.0)
+
+
+def test_trigger_gating_without_matching_trigger_record():
+    # __answer rule exists but no __trigger record → predictions unchanged
+    answer_preds = {"c1": "Yes", "c2": "No"}
+    gt = {
+        "c1": {"metric__answer": "Yes"},
+        "c2": {"metric__answer": "No"},
+    }
+    answer_rec = _record("answer desc", answer_preds, initial_accuracy=None)
+    answer_rec["rule_id"] = "metric__answer"
+    result = asyncio.run(benchmarking(_state({"metric__answer": answer_rec}, gt, iteration=0)))
+    r = result["parameter_records"]["metric__answer"]
+    assert r["current_accuracy"] == pytest.approx(1.0)

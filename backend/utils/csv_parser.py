@@ -6,15 +6,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_COLUMNS = {
-    "conversation_id", "transcript", "rule_id", "rule_type",
-    "speaker", "evaluation_type", "n_messages", "description", "ground_truth",
-}
-
-VALID_RULE_TYPES = {"trigger", "answer"}
-VALID_EVALUATION_TYPES = {"entire", "first", "last"}
-VALID_SPEAKERS = {"agent", "customer"}
-VALID_GROUND_TRUTHS = {"Yes", "No", "NA"}
+REQUIRED_FIXED_COLUMNS = {"ConversationID", "transcript"}
+_GT_MAP = {"yes": "Yes", "no": "No", "na": "NA"}
 
 
 class CSVParseError(ValueError):
@@ -23,15 +16,14 @@ class CSVParseError(ValueError):
 
 def parse(
     file_content: bytes,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Dict[str, str]], List[str]]:
-    """Parse and validate the input CSV.
-
-    Returns:
-        conversations: deduplicated list of {conversation_id, transcript}
-        rules: list of unique rule metadata dicts
-        ground_truth_map: {conv_id: {rule_id: "Yes"|"No"|"NA"}}
-        excluded_rules: rule_ids with <5 evaluable (non-NA) rows
-    """
+) -> Tuple[
+    List[Dict[str, Any]],        # conversations: [{conversation_id, transcript}]
+    List[str],                   # metric_names: valid metric column names
+    Dict[str, Dict[str, str]],   # ground_truth_map: {conv_id: {metric_name: GT}}
+    List[str],                   # excluded_parameters: metric names with <5 evaluable rows
+    List[str],                   # na_detected_parameters: valid metric names with ≥1 NA
+]:
+    """Parse wide-format CSV. Fixed cols: ConversationID, transcript. Rest = metric columns."""
     try:
         df = pd.read_csv(
             pd.io.common.BytesIO(file_content),
@@ -42,136 +34,85 @@ def parse(
     except Exception as exc:
         raise CSVParseError(f"Failed to read CSV: {exc}") from exc
 
-    # 1. Required columns
-    missing = REQUIRED_COLUMNS - set(df.columns)
+    # 1. Required fixed columns
+    missing = REQUIRED_FIXED_COLUMNS - set(df.columns)
     if missing:
         raise CSVParseError(f"Missing required columns: {sorted(missing)}")
 
+    # 2. Metric columns = everything except the two fixed ones
+    metric_columns = [c for c in df.columns if c not in REQUIRED_FIXED_COLUMNS]
+    if not metric_columns:
+        raise CSVParseError(
+            "CSV must have at least one metric column beyond ConversationID and transcript"
+        )
+
     df = df.copy()
 
-    # 2. Normalize rule_type
-    df["rule_type"] = df["rule_type"].str.strip().str.lower()
-    bad_rule_type = df[~df["rule_type"].isin(VALID_RULE_TYPES)]
-    if not bad_rule_type.empty:
-        raise CSVParseError(
-            f"Invalid rule_type values in rows {bad_rule_type.index.tolist()}: "
-            f"must be 'trigger' or 'answer'"
-        )
+    # 3. Normalize ground truth values for all metric columns
+    for col in metric_columns:
+        df[col] = df[col].str.strip().str.lower().map(_GT_MAP)
+        bad = df[df[col].isna()]
+        if not bad.empty:
+            raise CSVParseError(
+                f"Invalid ground_truth values in metric '{col}' at rows "
+                f"{bad.index.tolist()}: must be 'Yes', 'No', or 'NA'"
+            )
 
-    # 3. evaluation_type
-    df["evaluation_type"] = df["evaluation_type"].str.strip().str.lower()
-    bad_eval = df[~df["evaluation_type"].isin(VALID_EVALUATION_TYPES)]
-    if not bad_eval.empty:
-        raise CSVParseError(
-            f"Invalid evaluation_type values in rows {bad_eval.index.tolist()}: "
-            f"must be 'entire', 'first', or 'last'"
-        )
-
-    # 4. n_messages must be non-negative integer
-    try:
-        df["n_messages"] = df["n_messages"].astype(int)
-    except (ValueError, TypeError) as exc:
-        raise CSVParseError(f"n_messages must be an integer: {exc}") from exc
-    if (df["n_messages"] < 0).any():
-        raise CSVParseError("n_messages must be a non-negative integer")
-
-    # 5. speaker
-    df["speaker"] = df["speaker"].str.strip().str.lower()
-    bad_speaker = df[~df["speaker"].isin(VALID_SPEAKERS)]
-    if not bad_speaker.empty:
-        raise CSVParseError(
-            f"Invalid speaker values in rows {bad_speaker.index.tolist()}: "
-            f"must be 'agent' or 'customer'"
-        )
-
-    # 6. ground_truth normalize — use explicit mapping so "NA" never becomes "Na"
-    _gt_map = {"yes": "Yes", "no": "No", "na": "NA"}
-    df["ground_truth"] = df["ground_truth"].str.strip().str.lower().map(_gt_map)
-    bad_gt = df[df["ground_truth"].isna()]
-    if not bad_gt.empty:
-        raise CSVParseError(
-            f"Invalid ground_truth values in rows {bad_gt.index.tolist()}: "
-            f"must be 'Yes', 'No', or 'NA'"
-        )
-
-    # 7. transcript must be valid JSON list
-    def parse_transcript(val: str) -> list:
-        try:
-            parsed = json.loads(val)
-            if not isinstance(parsed, list):
-                raise ValueError("transcript must be a JSON array")
-            return parsed
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise CSVParseError(f"Invalid transcript JSON: {exc}") from exc
-
+    # 4. Transcript must be valid JSON array (deduplicated by ConversationID)
     parsed_transcripts: Dict[str, list] = {}
-    for idx, row in df.iterrows():
-        conv_id = str(row["conversation_id"]).strip()
+    for _, row in df.iterrows():
+        conv_id = str(row["ConversationID"]).strip()
         if conv_id not in parsed_transcripts:
-            parsed_transcripts[conv_id] = parse_transcript(str(row["transcript"]))
+            try:
+                parsed = json.loads(str(row["transcript"]))
+                if not isinstance(parsed, list):
+                    raise ValueError("transcript must be a JSON array")
+                parsed_transcripts[conv_id] = parsed
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise CSVParseError(
+                    f"Invalid transcript JSON for ConversationID '{conv_id}': {exc}"
+                ) from exc
 
-    # 8. Minimum 10 valid rows
+    # 5. Minimum 10 rows
     if len(df) < 10:
         raise CSVParseError(f"CSV must have at least 10 rows; found {len(df)}")
 
-    # 9. Rule metadata consistency within each rule_id
-    metadata_cols = ["rule_type", "speaker", "evaluation_type", "n_messages"]
-    for rule_id, group in df.groupby("rule_id"):
-        for col in metadata_cols:
-            if group[col].nunique() > 1:
-                raise CSVParseError(
-                    f"Inconsistent {col!r} values for rule_id {rule_id!r}: "
-                    f"{group[col].unique().tolist()}"
-                )
-
-    # Build ground_truth_map
+    # 6. Build ground_truth_map
     ground_truth_map: Dict[str, Dict[str, str]] = {}
     for _, row in df.iterrows():
-        conv_id = str(row["conversation_id"]).strip()
-        rule_id = str(row["rule_id"]).strip()
-        ground_truth_map.setdefault(conv_id, {})[rule_id] = row["ground_truth"]
+        conv_id = str(row["ConversationID"]).strip()
+        ground_truth_map.setdefault(conv_id, {})
+        for col in metric_columns:
+            ground_truth_map[conv_id][col] = row[col]
 
-    # 9. Each rule_id must have ≥5 evaluable (non-NA) rows; excluded otherwise
-    all_rule_ids = df["rule_id"].unique().tolist()
-    excluded_rules: List[str] = []
-    valid_rule_ids: List[str] = []
-
-    for rule_id in all_rule_ids:
-        evaluable_count = sum(
+    # 7. Exclude metrics with <5 evaluable (non-NA) rows
+    excluded_parameters: List[str] = []
+    valid_metric_columns: List[str] = []
+    for col in metric_columns:
+        evaluable = sum(
             1 for conv_gt in ground_truth_map.values()
-            if conv_gt.get(rule_id) in ("Yes", "No")
+            if conv_gt.get(col) in ("Yes", "No")
         )
-        if evaluable_count < 5:
-            excluded_rules.append(rule_id)
-            logger.info("Excluding rule_id=%s: only %d evaluable rows", rule_id, evaluable_count)
+        if evaluable < 5:
+            excluded_parameters.append(col)
+            logger.info("Excluding metric=%s: only %d evaluable rows", col, evaluable)
         else:
-            valid_rule_ids.append(rule_id)
+            valid_metric_columns.append(col)
+
+    # 8. Detect NA in valid metrics
+    na_detected_parameters: List[str] = [
+        col for col in valid_metric_columns
+        if any(conv_gt.get(col) == "NA" for conv_gt in ground_truth_map.values())
+    ]
 
     logger.info(
-        "CSV parsed: %d conversations, %d rules (%d excluded)",
-        len(parsed_transcripts), len(valid_rule_ids), len(excluded_rules),
+        "CSV parsed: %d conversations, %d metrics (%d excluded)",
+        len(parsed_transcripts), len(valid_metric_columns), len(excluded_parameters),
     )
 
-    # Build deduplicated conversations list
     conversations: List[Dict[str, Any]] = [
         {"conversation_id": conv_id, "transcript": transcript}
         for conv_id, transcript in parsed_transcripts.items()
     ]
 
-    # Build rules list (unique rule metadata, only valid rules)
-    seen_rule_ids: set = set()
-    rules: List[Dict[str, Any]] = []
-    for _, row in df.iterrows():
-        rule_id = str(row["rule_id"]).strip()
-        if rule_id in valid_rule_ids and rule_id not in seen_rule_ids:
-            seen_rule_ids.add(rule_id)
-            rules.append({
-                "rule_id": rule_id,
-                "rule_type": row["rule_type"],
-                "speaker": row["speaker"],
-                "evaluation_type": row["evaluation_type"],
-                "n_messages": int(row["n_messages"]),
-                "description": str(row["description"]).strip(),
-            })
-
-    return conversations, rules, ground_truth_map, excluded_rules
+    return conversations, valid_metric_columns, ground_truth_map, excluded_parameters, na_detected_parameters

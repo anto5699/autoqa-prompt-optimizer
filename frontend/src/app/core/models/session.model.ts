@@ -1,9 +1,18 @@
-export interface RuleInfo {
-  rule_id: string;
-  rule_type: string;
-  speaker: string;
-  evaluation_type: string;
-  n_messages: number;
+export interface ModelConfig {
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}
+
+export interface ParameterInfo {
+  parameter_name: string;
+  has_na: boolean;
+}
+
+export interface MetricConfig {
+  type: 'static' | 'dynamic';
+  answer_description: string;
+  trigger_description?: string;
 }
 
 export interface ClarifyingQuestion {
@@ -20,8 +29,8 @@ export interface ParameterSummary {
 
 export interface CreateSessionResponse {
   session_id: string;
-  rules_detected: RuleInfo[];
-  excluded_rules: string[];
+  parameters_detected: ParameterInfo[];
+  excluded_parameters: string[];
   conversation_count: number;
 }
 
@@ -29,7 +38,7 @@ export interface SessionStatus {
   session_id: string;
   current_phase: string;
   current_iteration: number;
-  rules: RuleInfo[];
+  parameters: ParameterInfo[];
   clarifying_questions: ClarifyingQuestion[];
   parameter_summary: Record<string, ParameterSummary>;
   progress_log: string[];

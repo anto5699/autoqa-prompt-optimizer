@@ -3,6 +3,18 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { SessionService } from '../../core/services/session.service';
+import { ModelConfig } from '../../core/models/session.model';
+
+const CSV_COLS = [
+  { name: 'ConversationID', type: 'string',        desc: 'Unique ID for each conversation row' },
+  { name: 'transcript',     type: 'string (JSON)', desc: 'Full agent–customer conversation as a JSON array' },
+  { name: '<Metric Name>',  type: 'Yes / No / NA', desc: 'One column per metric — column header is the metric name. NA = not applicable (excluded from accuracy math)' },
+];
+const CSV_SAMPLE = [
+  ['conv_001', '"[{…}]"', 'Yes', 'No',  'NA'],
+  ['conv_002', '"[{…}]"', 'No',  'Yes', 'Yes'],
+  ['conv_003', '"[{…}]"', 'Yes', 'Yes', 'No'],
+];
 
 @Component({
   selector: 'app-upload',
@@ -10,34 +22,146 @@ import { SessionService } from '../../core/services/session.service';
   imports: [CommonModule, FormsModule],
   template: `
     <div class="page">
-      <h1>AutoQA Prompt Optimizer</h1>
+      <div class="page-header">
+        <h1>Upload Evaluation Data</h1>
+        <p>Upload a CSV of conversations with ground truth labels. The AI will iteratively refine your evaluation prompts until they reach your accuracy target.</p>
+        <div style="text-align:left;max-width:580px;margin:0 auto;">
+          <button class="format-toggle" (click)="formatOpen = !formatOpen">
+            <span class="arrow" [class.open]="formatOpen">▶</span>
+            {{ formatOpen ? 'Hide' : 'View' }} expected CSV format
+          </button>
+          <div *ngIf="formatOpen" class="format-panel">
+            <div class="format-section-label">Required columns</div>
+            <div class="col-list">
+              <div *ngFor="let c of csvCols" class="col-row">
+                <code class="col-name">{{ c.name }}</code>
+                <span class="col-type">{{ c.type }}</span>
+                <span class="col-desc">{{ c.desc }}</span>
+              </div>
+            </div>
+            <div class="format-section-label">Sample (one row per conversation × parameter)</div>
+            <div class="sample-table-wrap">
+              <table class="sample-table">
+                <thead>
+                  <tr>
+                    <th *ngFor="let h of ['ConversationID','transcript','Greeting Compliance','Empathy Score','By Question Check']">{{ h }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr *ngFor="let row of csvSample">
+                    <td>{{ row[0] }}</td>
+                    <td>{{ row[1] }}</td>
+                    <td>{{ row[2] }}</td>
+                    <td>{{ row[3] }}</td>
+                    <td [class.gt-yes]="row[4]==='Yes'" [class.gt-no]="row[4]==='No'" [class.gt-na]="row[4]==='NA'">{{ row[4] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="format-hint">Wide format — one row per conversation. Add one column per metric.</p>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
-        <h2>Upload Evaluation Data</h2>
-
-        <div class="field">
-          <span class="field-label">Conversations CSV</span>
-          <div class="dropzone" (dragover)="$event.preventDefault()" (drop)="onDrop($event)">
-            <span>{{ csvFile ? csvFile.name : 'Click or drag a .csv file here' }}</span>
-            <input type="file" accept=".csv" class="dropzone-input" (change)="onFile($event)">
+        <!-- Section 1: Evaluation Data -->
+        <div>
+          <div class="section-label">Evaluation Data</div>
+          <div class="field">
+            <label>Conversations CSV</label>
+            <div class="dropzone"
+                 [class.dragging]="dragging"
+                 [class.has-file]="!!csvFile"
+                 (dragover)="$event.preventDefault(); dragging=true"
+                 (dragleave)="dragging=false"
+                 (drop)="onDrop($event)">
+              <input type="file" accept=".csv" class="dropzone-input" (change)="onFile($event)">
+              <div *ngIf="!csvFile" class="drop-placeholder">
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+                  <path d="M16 20V10m0-4l-5 5m5-5l5 5" stroke="#9ca3af" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  <rect x="4" y="22" width="24" height="6" rx="2" fill="#f3f4f6" stroke="#e5e7eb" stroke-width="1.2"/>
+                  <text x="16" y="27" text-anchor="middle" font-size="7" fill="#9ca3af" font-family="monospace">.csv</text>
+                </svg>
+                <p>Drop a .csv file here</p>
+                <span>or click to browse</span>
+              </div>
+              <div *ngIf="csvFile" class="drop-file-info">
+                <span class="drop-file-icon">✓</span>
+                <div>
+                  <div class="drop-file-name">{{ csvFile.name }}</div>
+                  <div class="drop-file-sub">{{ (csvFile.size / 1024).toFixed(1) }} KB · Click to replace</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="row">
-          <div class="field">
-            <label>Max Iterations</label>
-            <input type="number" [(ngModel)]="maxIterations" min="1" max="10">
-          </div>
-          <div class="field">
-            <label>Accuracy Target</label>
-            <input type="number" [(ngModel)]="accuracyTarget" min="0.1" max="1" step="0.05">
+        <!-- Section 2: Run Configuration -->
+        <div>
+          <div class="section-label">Run Configuration</div>
+          <div class="run-grid">
+            <div class="field">
+              <label>Max Iterations</label>
+              <div class="slider-row">
+                <input type="range" min="1" max="10" [(ngModel)]="maxIterations" style="flex:1">
+                <span class="slider-val">{{ maxIterations }}</span>
+              </div>
+              <div class="slider-range"><span>1</span><span>10</span></div>
+            </div>
+            <div class="field">
+              <label>Accuracy Target</label>
+              <div class="target-btns">
+                <button *ngFor="let t of targets" class="target-btn" [class.active]="accuracyTarget === t" (click)="accuracyTarget = t">
+                  {{ t * 100 | number:'1.0-0' }}%
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div *ngIf="error" class="error">{{ error }}</div>
+        <!-- Section 3: Model Configuration -->
+        <div>
+          <div class="section-label">Model Configuration</div>
+          <div class="model-grid">
+            <div class="field">
+              <label>Model</label>
+              <input class="input mono" type="text" [(ngModel)]="modelConfig.model" placeholder="gpt-4o" (ngModelChange)="connState='idle'">
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <input class="input" type="password" [(ngModel)]="modelConfig.apiKey" placeholder="sk-…" (ngModelChange)="connState='idle'">
+            </div>
+          </div>
+          <div class="field input-full">
+            <label>Base URL <span class="hint">(optional)</span></label>
+            <input class="input" type="text" [(ngModel)]="modelConfig.baseUrl" placeholder="https://api.openai.com/v1" (ngModelChange)="connState='idle'">
+          </div>
+          <div class="conn-row">
+            <button class="test-btn"
+                    [class.success]="connState==='success'"
+                    [class.error]="connState==='error'"
+                    [disabled]="testing"
+                    (click)="testConnection()">
+              <span *ngIf="testing" class="spinner"></span>
+              <ng-container *ngIf="!testing">
+                {{ connState === 'success' ? '✓ Connected' : connState === 'error' ? '✗ Failed' : 'Test Connection' }}
+              </ng-container>
+              <ng-container *ngIf="testing">Testing…</ng-container>
+            </button>
+            <span *ngIf="connMessage" class="conn-msg" [class.success]="connState==='success'" [class.error]="connState==='error'">
+              {{ connMessage }}
+            </span>
+          </div>
+        </div>
 
-        <button [disabled]="!csvFile || loading" (click)="submit()">
-          {{ loading ? 'Uploading…' : 'Start Optimization' }}
-        </button>
+        <!-- CTA -->
+        <div>
+          <div *ngIf="error" class="error-msg" style="margin-bottom:12px;">{{ error }}</div>
+          <button class="cta-btn" [disabled]="!csvFile || loading" (click)="submit()">
+            {{ loading ? 'Uploading…' : 'Start Optimization' }} <span style="font-size:1.1rem">→</span>
+          </button>
+          <p *ngIf="!csvFile" class="cta-hint">Select a CSV file to continue</p>
+        </div>
       </div>
     </div>
   `,
@@ -45,10 +169,20 @@ import { SessionService } from '../../core/services/session.service';
 })
 export class UploadComponent {
   csvFile: File | null = null;
+  dragging = false;
   maxIterations = 8;
   accuracyTarget = 0.90;
+  targets = [0.70, 0.80, 0.90, 0.95];
   loading = false;
   error = '';
+  formatOpen = false;
+  csvCols = CSV_COLS;
+  csvSample = CSV_SAMPLE;
+
+  modelConfig: ModelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+  testing = false;
+  connState: 'idle' | 'testing' | 'success' | 'error' = 'idle';
+  connMessage = '';
 
   constructor(private svc: SessionService, private router: Router) {}
 
@@ -59,15 +193,39 @@ export class UploadComponent {
 
   onDrop(e: DragEvent) {
     e.preventDefault();
+    this.dragging = false;
     const f = e.dataTransfer?.files[0];
-    if (f) this.csvFile = f;
+    if (f && f.name.endsWith('.csv')) this.csvFile = f;
+  }
+
+  testConnection() {
+    this.testing = true;
+    this.connState = 'idle';
+    this.connMessage = '';
+    this.svc.validateModelConfig(this.modelConfig).subscribe({
+      next: r => {
+        this.testing = false;
+        if (r.valid) {
+          this.connState = 'success';
+          this.connMessage = `Connected · ${r.model_used ?? this.modelConfig.model}`;
+        } else {
+          this.connState = 'error';
+          this.connMessage = r.error ?? 'Validation failed';
+        }
+      },
+      error: e => {
+        this.testing = false;
+        this.connState = 'error';
+        this.connMessage = e.error?.detail ?? 'Connection test failed';
+      }
+    });
   }
 
   submit() {
     if (!this.csvFile) return;
     this.loading = true;
     this.error = '';
-    this.svc.createSession(this.csvFile, this.maxIterations, this.accuracyTarget, 'en')
+    this.svc.createSession(this.csvFile, this.maxIterations, this.accuracyTarget, 'en', this.modelConfig)
       .subscribe({
         next: r => this.router.navigate([`/descriptions/${r.session_id}`]),
         error: e => { this.error = e.error?.detail || 'Upload failed'; this.loading = false; }

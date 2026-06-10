@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { CreateSessionResponse, SessionStatus } from '../models/session.model';
+import { CreateSessionResponse, MetricConfig, ModelConfig, SessionStatus } from '../models/session.model';
 import { FinalReport } from '../models/report.model';
 
 @Injectable({ providedIn: 'root' })
@@ -12,21 +12,34 @@ export class SessionService {
     file: File,
     maxIterations: number,
     accuracyTarget: number,
-    language: string
+    language: string,
+    modelConfig?: ModelConfig
   ): Observable<CreateSessionResponse> {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('max_iterations', String(maxIterations));
     fd.append('accuracy_target', String(accuracyTarget));
     fd.append('language', language);
+    if (modelConfig) {
+      fd.append('model_name', modelConfig.model);
+      fd.append('api_key_override', modelConfig.apiKey);
+      fd.append('base_url', modelConfig.baseUrl);
+    }
     return this.http.post<CreateSessionResponse>('/api/sessions', fd);
+  }
+
+  validateModelConfig(config: ModelConfig): Observable<{ valid: boolean; model_used?: string; error?: string }> {
+    return this.http.post<{ valid: boolean; model_used?: string; error?: string }>(
+      '/api/config/validate',
+      { model: config.model, api_key: config.apiKey, base_url: config.baseUrl }
+    );
   }
 
   getSession(sessionId: string): Observable<SessionStatus> {
     return this.http.get<SessionStatus>(`/api/sessions/${sessionId}`);
   }
 
-  submitDescriptions(sessionId: string, descriptions: Record<string, string>): Observable<{ status: string }> {
+  submitDescriptions(sessionId: string, descriptions: Record<string, MetricConfig>): Observable<{ status: string }> {
     return this.http.post<{ status: string }>(`/api/sessions/${sessionId}/descriptions`, { descriptions });
   }
 

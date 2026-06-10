@@ -11,17 +11,54 @@ import { ClarifyingQuestion } from '../../core/models/session.model';
   imports: [CommonModule, FormsModule],
   template: `
     <div class="page">
-      <h1>Clarify Evaluation Rules</h1>
-      <div class="card" *ngFor="let q of questions; let i = index">
-        <div class="rule-tag">{{ q.parameter_name }}</div>
-        <p class="question">{{ q.question_text }}</p>
-        <p class="rationale">{{ q.rationale }}</p>
-        <textarea [(ngModel)]="answers[q.question_id]" placeholder="Your answer…" rows="3"></textarea>
+      <div class="page-header">
+        <h1>Answer {{ questions.length }} Clarifying Questions</h1>
+        <p>Before optimization begins, the AI identified semantic ambiguities in your descriptions that could cause misclassifications. Your answers will be injected into the evaluation prompts.</p>
       </div>
-      <div *ngIf="error" class="error">{{ error }}</div>
-      <button [disabled]="!allAnswered || loading" (click)="submit()">
-        {{ loading ? 'Submitting…' : 'Submit & Continue' }}
-      </button>
+
+      <div class="progress-bar-row">
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="questions.length ? (answeredCount / questions.length * 100) : 0"></div>
+        </div>
+        <span class="progress-label" [class.all-done]="answeredCount === questions.length && questions.length > 0">
+          {{ answeredCount }} / {{ questions.length }} answered
+        </span>
+      </div>
+
+      <ng-container *ngFor="let group of groups">
+        <div class="param-group">
+          <div class="param-group-header">
+            <code class="param-group-id">{{ group.paramName }}</code>
+            <span class="badge" [class.answer]="group.ruleType==='answer'" [class.trigger]="group.ruleType==='trigger'">
+              {{ group.ruleType }}
+            </span>
+          </div>
+          <div *ngFor="let q of group.questions; let qi = index" class="question-card" [class.answered]="!!answers[q.question_id]?.trim()">
+            <div class="question-top">
+              <div class="q-number" [class.answered]="!!answers[q.question_id]?.trim()">
+                {{ answers[q.question_id]?.trim() ? '✓' : (qi + 1) }}
+              </div>
+              <div>
+                <p class="q-text">{{ q.question_text }}</p>
+                <p class="q-rationale">Why this matters: {{ q.rationale }}</p>
+              </div>
+            </div>
+            <textarea
+              [(ngModel)]="answers[q.question_id]"
+              [class.answered]="!!answers[q.question_id]?.trim()"
+              rows="2"
+              placeholder="Your answer…"
+            ></textarea>
+          </div>
+        </div>
+      </ng-container>
+
+      <div *ngIf="error" class="error-msg">{{ error }}</div>
+      <div class="footer">
+        <button [disabled]="!allAnswered || loading" (click)="submit()">
+          {{ loading ? 'Submitting…' : 'Start Optimization' }} <span style="font-size:1.1rem">→</span>
+        </button>
+      </div>
     </div>
   `,
   styleUrls: ['./clarification.component.css']
@@ -44,6 +81,23 @@ export class ClarificationComponent implements OnInit {
       },
       error: () => this.error = 'Failed to load session'
     });
+  }
+
+  get groups(): { paramName: string; ruleType: string; questions: ClarifyingQuestion[] }[] {
+    const map = new Map<string, ClarifyingQuestion[]>();
+    for (const q of this.questions) {
+      if (!map.has(q.parameter_name)) map.set(q.parameter_name, []);
+      map.get(q.parameter_name)!.push(q);
+    }
+    return Array.from(map.entries()).map(([paramName, qs]) => ({
+      paramName,
+      ruleType: 'answer',
+      questions: qs,
+    }));
+  }
+
+  get answeredCount(): number {
+    return this.questions.filter(q => this.answers[q.question_id]?.trim()).length;
   }
 
   get allAnswered(): boolean {

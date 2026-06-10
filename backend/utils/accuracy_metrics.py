@@ -6,22 +6,29 @@ def compute_metrics(
     ground_truth_map: Dict[str, Dict[str, str]],
     rule_id: str,
 ) -> dict:
-    """Compute TP/TN/FP/FN and derived metrics for a single rule.
+    """3-class accuracy: Yes / No / NA all count in denominator.
 
-    NA ground truths are excluded from all math.
-    Denominator = TP + TN + FP + FN only.
+    na_correct = GT=NA and pred=NA → correct
+    na_wrong   = GT=NA and pred=Yes/No → wrong
+    Binary precision/recall/F1 use Yes/No only (NA predictions excluded).
     """
-    tp = tn = fp = fn = na_count = 0
+    tp = tn = fp = fn = na_correct = na_wrong = wrong_na_pred = 0
 
     for conv_id, gt_by_rule in ground_truth_map.items():
         gt = gt_by_rule.get(rule_id)
-        if gt == "NA" or gt is None:
-            na_count += 1
-            continue
-
         pred = predictions.get(conv_id, "No")
 
-        if gt == "Yes" and pred == "Yes":
+        if gt is None:
+            continue
+
+        if gt == "NA":
+            if pred == "NA":
+                na_correct += 1
+            else:
+                na_wrong += 1
+        elif pred == "NA":
+            wrong_na_pred += 1
+        elif gt == "Yes" and pred == "Yes":
             tp += 1
         elif gt == "No" and pred == "No":
             tn += 1
@@ -30,8 +37,8 @@ def compute_metrics(
         elif gt == "Yes" and pred == "No":
             fn += 1
 
-    denominator = tp + tn + fp + fn
-    accuracy = (tp + tn) / denominator if denominator > 0 else 0.0
+    total = tp + tn + fp + fn + na_correct + na_wrong + wrong_na_pred
+    accuracy = (tp + tn + na_correct) / total if total > 0 else 0.0
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
@@ -45,5 +52,7 @@ def compute_metrics(
         "tn": tn,
         "fp": fp,
         "fn": fn,
-        "not_applicable_count": na_count,
+        "na_correct": na_correct,
+        "na_wrong": na_wrong,
+        "not_applicable_count": na_correct + na_wrong,  # kept for backward compat with report
     }

@@ -4,6 +4,13 @@ export interface ModelConfig {
   baseUrl: string;
 }
 
+export interface ModelConfigValidateResponse {
+  valid: boolean;
+  model_used?: string | null;
+  error?: string | null;
+  models?: string[] | null;
+}
+
 export interface ParameterInfo {
   parameter_name: string;
   has_na: boolean;
@@ -42,4 +49,5 @@ export interface SessionStatus {
   clarifying_questions: ClarifyingQuestion[];
   parameter_summary: Record<string, ParameterSummary>;
   progress_log: string[];
+  error_message?: string;
 }

@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { CreateSessionResponse, MetricConfig, ModelConfig, SessionStatus } from '../models/session.model';
+import { CreateSessionResponse, MetricConfig, ModelConfig, ModelConfigValidateResponse, SessionStatus } from '../models/session.model';
 import { FinalReport } from '../models/report.model';
 
 @Injectable({ providedIn: 'root' })
@@ -28,8 +28,8 @@ export class SessionService {
     return this.http.post<CreateSessionResponse>('/api/sessions', fd);
   }
 
-  validateModelConfig(config: ModelConfig): Observable<{ valid: boolean; model_used?: string; error?: string }> {
-    return this.http.post<{ valid: boolean; model_used?: string; error?: string }>(
+  validateModelConfig(config: ModelConfig): Observable<ModelConfigValidateResponse> {
+    return this.http.post<ModelConfigValidateResponse>(
       '/api/config/validate',
       { model: config.model, api_key: config.apiKey, base_url: config.baseUrl }
     );

@@ -8,7 +8,7 @@ import { ModelConfig } from '../../core/models/session.model';
 const CSV_COLS = [
   { name: 'ConversationID', type: 'string',        desc: 'Unique ID for each conversation row' },
   { name: 'transcript',     type: 'string (JSON)', desc: 'Full agent–customer conversation as a JSON array' },
-  { name: '<Metric Name>',  type: 'Yes / No / NA', desc: 'One column per metric — column header is the metric name. NA = not applicable (excluded from accuracy math)' },
+  { name: '<Metric Name>',  type: 'Yes / No / NA', desc: 'One column per metric — column header is the metric name. NA = not applicable (counted in accuracy; correct only when the AI also predicts NA)' },
 ];
 const CSV_SAMPLE = [
   ['conv_001', '"[{…}]"', 'Yes', 'No',  'NA'],
@@ -122,20 +122,42 @@ const CSV_SAMPLE = [
         <!-- Section 3: Model Configuration -->
         <div>
           <div class="section-label">Model Configuration</div>
-          <div class="model-grid">
-            <div class="field">
-              <label>Model</label>
-              <input class="input mono" type="text" [(ngModel)]="modelConfig.model" placeholder="gpt-4o" (ngModelChange)="connState='idle'">
-            </div>
-            <div class="field">
-              <label>API Key</label>
-              <input class="input" type="password" [(ngModel)]="modelConfig.apiKey" placeholder="sk-…" (ngModelChange)="connState='idle'">
-            </div>
+
+          <!-- Mode selector -->
+          <div class="mode-tabs">
+            <button class="mode-tab" [class.active]="configMode==='default'" (click)="setMode('default')">
+              Default (.env)
+            </button>
+            <button class="mode-tab" [class.active]="configMode==='custom-key'" (click)="setMode('custom-key')">
+              Custom OpenAI Key
+            </button>
+            <button class="mode-tab" [class.active]="configMode==='custom-endpoint'" (click)="setMode('custom-endpoint')">
+              Custom Endpoint
+            </button>
           </div>
-          <div class="field input-full">
-            <label>Base URL <span class="hint">(optional)</span></label>
-            <input class="input" type="text" [(ngModel)]="modelConfig.baseUrl" placeholder="https://api.openai.com/v1" (ngModelChange)="connState='idle'">
+
+          <!-- API key field (hidden in default mode) -->
+          <div class="field" *ngIf="configMode !== 'default'">
+            <label>API Key</label>
+            <input class="input" type="password" [(ngModel)]="modelConfig.apiKey" placeholder="sk-…" (ngModelChange)="onConfigChange()">
           </div>
+
+          <!-- Base URL field (custom endpoint only) -->
+          <div class="field" *ngIf="configMode === 'custom-endpoint'">
+            <label>Base URL</label>
+            <input class="input" type="text" [(ngModel)]="modelConfig.baseUrl" placeholder="https://api.openai.com/v1" (ngModelChange)="onConfigChange()">
+          </div>
+
+          <!-- Model: dropdown when models are available, text input otherwise -->
+          <div class="field">
+            <label>Model</label>
+            <select class="input" *ngIf="availableModels.length > 0" [(ngModel)]="modelConfig.model" (ngModelChange)="onConfigChange()">
+              <option *ngFor="let m of availableModels" [value]="m">{{ m }}</option>
+            </select>
+            <input class="input mono" type="text" *ngIf="availableModels.length === 0"
+                   [(ngModel)]="modelConfig.model" placeholder="gpt-4o" (ngModelChange)="onConfigChange()">
+          </div>
+
           <div class="conn-row">
             <button class="test-btn"
                     [class.success]="connState==='success'"
@@ -148,7 +170,7 @@ const CSV_SAMPLE = [
               </ng-container>
               <ng-container *ngIf="testing">Testing…</ng-container>
             </button>
-            <span *ngIf="connMessage" class="conn-msg" [class.success]="connState==='success'" [class.error]="connState==='error'">
+            <span *ngIf="connMessage" class="conn-msg" [class.conn-success]="connState==='success'" [class.conn-error]="connState==='error'">
               {{ connMessage }}
             </span>
           </div>
@@ -183,8 +205,30 @@ export class UploadComponent {
   testing = false;
   connState: 'idle' | 'testing' | 'success' | 'error' = 'idle';
   connMessage = '';
+  configMode: 'default' | 'custom-key' | 'custom-endpoint' = 'default';
+  availableModels: string[] = [];
 
   constructor(private svc: SessionService, private router: Router) {}
+
+  setMode(mode: 'default' | 'custom-key' | 'custom-endpoint') {
+    this.configMode = mode;
+    this.availableModels = [];
+    this.connState = 'idle';
+    this.connMessage = '';
+    if (mode === 'default') {
+      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+    } else if (mode === 'custom-key') {
+      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+    } else {
+      this.modelConfig = { model: '', apiKey: '', baseUrl: '' };
+    }
+  }
+
+  onConfigChange() {
+    this.connState = 'idle';
+    this.connMessage = '';
+    this.availableModels = [];
+  }
 
   onFile(e: Event) {
     const f = (e.target as HTMLInputElement).files?.[0];
@@ -208,6 +252,12 @@ export class UploadComponent {
         if (r.valid) {
           this.connState = 'success';
           this.connMessage = `Connected · ${r.model_used ?? this.modelConfig.model}`;
+          if (r.models && r.models.length > 0) {
+            this.availableModels = r.models;
+            if (!this.availableModels.includes(this.modelConfig.model)) {
+              this.modelConfig.model = this.availableModels[0];
+            }
+          }
         } else {
           this.connState = 'error';
           this.connMessage = r.error ?? 'Validation failed';

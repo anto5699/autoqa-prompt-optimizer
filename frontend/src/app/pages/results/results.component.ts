@@ -19,9 +19,14 @@ type FilterKey = 'all' | 'converged' | 'not-met';
           <h1>Optimization Complete</h1>
           <p>Session <code>{{ report.session_id }}</code> · {{ report.generated_at | date:'medium' }}</p>
         </div>
-        <button class="export-btn" [class.exported]="exported" (click)="exportCsv()">
-          {{ exported ? '✓ Exported' : '↓ Export CSV' }}
-        </button>
+        <div class="header-btns">
+          <button class="export-btn" [class.exported]="exported" (click)="exportCsv()">
+            {{ exported ? '✓ Exported' : '↓ Export CSV' }}
+          </button>
+          <button class="export-btn pdf-btn" (click)="exportPdf()">
+            ↗ Export PDF
+          </button>
+        </div>
       </div>
 
       <!-- KPI cards -->

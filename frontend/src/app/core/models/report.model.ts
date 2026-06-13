@@ -41,6 +41,8 @@ export interface ReportSummary {
   parameters_meeting_target: number;
   parameters_below_target: number;
   overall_accuracy: number;
+  overall_precision: number;
+  overall_recall: number;
   total_iterations: number;
   total_conversations: number;
   accuracy_target: number;

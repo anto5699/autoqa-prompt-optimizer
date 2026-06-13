@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { CreateSessionResponse, MetricConfig, ModelConfig, ModelConfigValidateResponse, SessionStatus } from '../models/session.model';
+import { ContinueResponse, CreateSessionResponse, MetricConfig, ModelConfig, ModelConfigValidateResponse, SessionStatus } from '../models/session.model';
 import { FinalReport } from '../models/report.model';
 
 @Injectable({ providedIn: 'root' })
@@ -53,5 +53,11 @@ export class SessionService {
 
   deleteSession(sessionId: string): Observable<void> {
     return this.http.delete<void>(`/api/sessions/${sessionId}`);
+  }
+
+  continueOptimization(sessionId: string, additionalIterations: number): Observable<ContinueResponse> {
+    return this.http.post<ContinueResponse>(`/api/sessions/${sessionId}/continue`, {
+      additional_iterations: additionalIterations,
+    });
   }
 }

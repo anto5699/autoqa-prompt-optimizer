@@ -20,6 +20,7 @@ export interface MetricConfig {
   type: 'static' | 'dynamic';
   answer_description: string;
   trigger_description?: string;
+  trigger_speaker?: 'agent' | 'customer';
 }
 
 export interface ClarifyingQuestion {
@@ -50,4 +51,9 @@ export interface SessionStatus {
   parameter_summary: Record<string, ParameterSummary>;
   progress_log: string[];
   error_message?: string;
+}
+
+export interface ContinueResponse {
+  new_session_id: string;
+  parameters_continuing: string[];
 }

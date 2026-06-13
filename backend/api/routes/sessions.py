@@ -9,6 +9,8 @@ from agents.graph import graph_app
 from agents.state import OptimizationState
 from api.schemas.report import FinalReport, ReportInProgressResponse
 from api.schemas.session import (
+    ContinueRequest,
+    ContinueResponse,
     CreateSessionResponse,
     ErrorResponse,
     ParameterInfo,
@@ -138,7 +140,7 @@ async def submit_descriptions(session_id: str, body: SubmitDescriptionsRequest) 
             rules.append({
                 "rule_id": trigger_id,
                 "rule_type": "trigger",
-                "speaker": "agent",
+                "speaker": config.trigger_speaker or "customer",
                 "evaluation_type": "entire",
                 "n_messages": 0,
                 "description": trigger_desc,
@@ -203,7 +205,14 @@ async def get_session(session_id: str) -> SessionStatusResponse:
     live_phase = live.get("current_phase", "")
     phase = store_phase if store_phase else live_phase
     iteration = live.get("current_iteration", session.get("current_iteration", 0))
-    questions = live.get("clarifying_questions") or session.get("clarifying_questions", [])
+    # Prefer session_store: it is written immediately before interrupt() fires and always
+    # reflects the CURRENT interrupt's questions. live state retains stale questions from
+    # previous interrupts because mid_loop_clarification only clears them on its own return.
+    # Only surface questions when the graph is actually paused waiting for them.
+    if phase == "awaiting_clarification":
+        questions = session.get("clarifying_questions", []) or live.get("clarifying_questions", [])
+    else:
+        questions = []
     progress = live.get("progress_log") or session.get("progress_log", [])
 
     parameter_summary: dict[str, ParameterSummary] = {}
@@ -230,6 +239,7 @@ async def get_session(session_id: str) -> SessionStatusResponse:
         clarifying_questions=questions,
         parameter_summary=parameter_summary,
         progress_log=progress,
+        error_message=session.get("error"),
     )
 
 
@@ -259,6 +269,110 @@ async def _resume_graph(session_id: str, resume_input, config: dict) -> None:
     except Exception as exc:
         logger.error("session=%s resume error: %s", session_id, exc)
         session_store.update(session_id, {"current_phase": "error", "error": str(exc)})
+
+
+async def _continue_graph(session_id: str, state: OptimizationState) -> None:
+    config = {"configurable": {"thread_id": session_id}}
+    try:
+        await graph_app.ainvoke(state, config=config)
+        graph_state = graph_app.get_state(config)
+        if graph_state and graph_state.next:
+            logger.info("session=%s continuation paused at interrupt, pending: %s", session_id, graph_state.next)
+            return
+        session_store.update(session_id, {"current_phase": "complete", "optimization_complete": True})
+    except Exception as exc:
+        logger.error("session=%s continuation error: %s", session_id, exc)
+        session_store.update(session_id, {"current_phase": "error", "error": str(exc)})
+
+
+@router.post("/{session_id}/continue", status_code=201, response_model=ContinueResponse)
+async def continue_session(session_id: str, body: ContinueRequest) -> ContinueResponse:
+    """Start a new optimization session for unconverged parameters, carrying all context forward."""
+    if body.additional_iterations < 1 or body.additional_iterations > 10:
+        raise HTTPException(status_code=400, detail="additional_iterations must be between 1 and 10")
+
+    session = session_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.get("current_phase") != "complete":
+        raise HTTPException(status_code=409, detail="Session optimization is not complete yet")
+
+    config = {"configurable": {"thread_id": session_id}}
+    try:
+        graph_state = graph_app.get_state(config)
+        live = graph_state.values if graph_state and graph_state.values else {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read session state: {exc}") from exc
+
+    below_target = live.get("parameters_below_target", [])
+    if not below_target:
+        raise HTTPException(status_code=409, detail="No unconverged parameters to continue")
+
+    unconverged_set = set(below_target)
+    rules = [r for r in live.get("rules", []) if r["rule_id"] in unconverged_set]
+    unconverged_records = {
+        rid: rec for rid, rec in live.get("parameter_records", {}).items()
+        if rid in unconverged_set
+    }
+
+    new_session_id = str(uuid.uuid4())
+
+    continuation_state: OptimizationState = {
+        "session_id": new_session_id,
+        "system_prompt": live.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
+        "language": live.get("language", "en"),
+        "llm_config": live.get("llm_config", {}),
+        "conversations": live.get("conversations", []),
+        "rules": rules,
+        "ground_truth_map": live.get("ground_truth_map", {}),
+        "excluded_rules": live.get("excluded_rules", []),
+        "clarifying_questions": [],
+        "user_answers": {},
+        "clarification_complete": False,
+        "clarified_rule_ids": [],
+        "current_iteration": 0,
+        "max_iterations": body.additional_iterations,
+        "accuracy_target": live.get("accuracy_target", 0.90),
+        "parameter_records": unconverged_records,
+        "optimization_complete": False,
+        "parameters_meeting_target": [],
+        "parameters_below_target": list(unconverged_set),
+        "progress_log": [f"Continuation from session {session_id} — {len(unconverged_set)} unconverged parameter(s)"],
+        "current_phase": "evaluating",
+        "final_report": None,
+        "skip_setup": True,
+    }
+
+    session_store.add(new_session_id, {
+        "session_id": new_session_id,
+        "current_phase": "evaluating",
+        "current_iteration": 0,
+        "optimization_complete": False,
+        "clarifying_questions": [],
+        "parameter_summary": {},
+        "progress_log": [],
+        "_metric_names": [r["rule_id"] for r in rules],
+        "_na_detected_parameters": [],
+        "_conversations": live.get("conversations", []),
+        "_ground_truth_map": live.get("ground_truth_map", {}),
+        "_excluded_rules": live.get("excluded_rules", []),
+        "_max_iterations": body.additional_iterations,
+        "_accuracy_target": live.get("accuracy_target", 0.90),
+        "_language": live.get("language", "en"),
+        "_llm_config": live.get("llm_config", {}),
+    })
+
+    asyncio.create_task(_continue_graph(new_session_id, continuation_state))
+
+    logger.info(
+        "session=%s continuation started as session=%s, %d unconverged params, %d additional iterations",
+        session_id, new_session_id, len(unconverged_set), body.additional_iterations,
+    )
+
+    return ContinueResponse(
+        new_session_id=new_session_id,
+        parameters_continuing=sorted(unconverged_set),
+    )
 
 
 @router.get("/{session_id}/report")

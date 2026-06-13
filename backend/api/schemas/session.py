@@ -12,6 +12,7 @@ class MetricConfig(BaseModel):
     type: Literal["static", "dynamic"]
     answer_description: str
     trigger_description: Optional[str] = None
+    trigger_speaker: Optional[Literal["agent", "customer"]] = "customer"
 
 
 class CreateSessionResponse(BaseModel):
@@ -34,6 +35,7 @@ class SessionStatusResponse(BaseModel):
     clarifying_questions: List[Dict[str, Any]] = Field(default_factory=list)
     parameter_summary: Dict[str, ParameterSummary] = Field(default_factory=dict)
     progress_log: List[str] = Field(default_factory=list)
+    error_message: Optional[str] = None
 
 
 class SubmitAnswersRequest(BaseModel):
@@ -55,3 +57,12 @@ class SubmitDescriptionsResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
+
+
+class ContinueRequest(BaseModel):
+    additional_iterations: int = 5
+
+
+class ContinueResponse(BaseModel):
+    new_session_id: str
+    parameters_continuing: list[str]

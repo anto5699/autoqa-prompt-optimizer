@@ -46,6 +46,7 @@ class OptimizationState(TypedDict):
     session_id: str
     system_prompt: str
     language: str
+    llm_config: Dict[str, str]
 
     conversations: List[Dict[str, Any]]
     rules: List[Dict[str, Any]]
@@ -55,6 +56,7 @@ class OptimizationState(TypedDict):
     clarifying_questions: List[ClarifyingQuestion]
     user_answers: Dict[str, str]
     clarification_complete: bool
+    clarified_rule_ids: List[str]
 
     current_iteration: int
     max_iterations: int
@@ -73,3 +75,4 @@ class OptimizationState(TypedDict):
     ]
 
     final_report: Optional[Dict[str, Any]]
+    skip_setup: bool  # True skips csv_ingestion → ambiguity_detection → baseline_prompt_generator

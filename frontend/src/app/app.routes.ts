@@ -7,4 +7,5 @@ export const routes: Routes = [
   { path: 'clarification/:sessionId', loadComponent: () => import('./pages/clarification/clarification.component').then(m => m.ClarificationComponent) },
   { path: 'progress/:sessionId', loadComponent: () => import('./pages/progress/progress.component').then(m => m.ProgressComponent) },
   { path: 'results/:sessionId', loadComponent: () => import('./pages/results/results.component').then(m => m.ResultsComponent) },
+  { path: 'results/:sessionId/print', loadComponent: () => import('./pages/results/print-report.component').then(m => m.PrintReportComponent) },
 ];

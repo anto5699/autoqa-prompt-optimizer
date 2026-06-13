@@ -26,6 +26,12 @@ async def finalize(state: OptimizationState) -> dict:
     overall_accuracy = (
         sum(r["current_accuracy"] for r in records.values()) / total if total else 0.0
     )
+    overall_precision = (
+        sum(r["current_precision"] for r in records.values()) / total if total else 0.0
+    )
+    overall_recall = (
+        sum(r["current_recall"] for r in records.values()) / total if total else 0.0
+    )
 
     gt_map = state["ground_truth_map"]
 
@@ -92,6 +98,8 @@ async def finalize(state: OptimizationState) -> dict:
             "parameters_meeting_target": len(meeting),
             "parameters_below_target": len(not_meeting),
             "overall_accuracy": overall_accuracy,
+            "overall_precision": overall_precision,
+            "overall_recall": overall_recall,
             "total_iterations": state["current_iteration"],
             "total_conversations": len(state["conversations"]),
             "accuracy_target": state["accuracy_target"],

@@ -39,6 +39,8 @@ class ReportSummary(BaseModel):
     parameters_meeting_target: int
     parameters_below_target: int
     overall_accuracy: float
+    overall_precision: float
+    overall_recall: float
     total_iterations: int
     total_conversations: int
     accuracy_target: float

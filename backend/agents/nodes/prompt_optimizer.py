@@ -1,10 +1,10 @@
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models import BaseChatModel
 
 from agents.state import OptimizationState
-from config import settings
+from config import get_llm, settings
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
@@ -38,19 +38,12 @@ Format rules:
 - PASS_CRITERIA: 2-5 numbered conditions; each must be observable from transcript text alone
 - EXAMPLES: minimum 2 PASS and 2 FAIL utterances that would appear verbatim in a transcript
 - Never use vague terms: "appropriately", "effectively", "sufficiently", "properly", "well"
-- Never require knowledge outside the transcript to evaluate a criterion\
+- Never require knowledge outside the transcript to evaluate a criterion
+- Transcript is text-only: never infer tone, intonation, warmth, voice quality, or prosodic cues — every criterion must be derivable from the written words alone
+- Adherence must be established from explicit verbal content in the transcript only — never from non-transcript actions (e.g., post-call system updates, CRM entries), implicit signals (e.g., agent hanging up), or behaviours that are not spoken in the conversation
+- Evaluation is binary: the agent either adhered or did not. Never introduce partial adherence, scoring, thresholds, or weighted criteria
+- Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description\
 """
-
-
-def _get_generation_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=settings.openai_model,
-        temperature=0.2,
-        top_p=1,
-        max_completion_tokens=2000,
-        timeout=120,
-        api_key=settings.openai_api_key or None,
-    )
 
 
 async def prompt_optimizer(state: OptimizationState) -> dict:
@@ -73,7 +66,12 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
     completed_messages: list[str] = []
 
     try:
-        llm = _get_generation_llm()
+        llm_config = state.get("llm_config", {})
+        llm = get_llm(
+            model=llm_config.get("model"),
+            api_key=llm_config.get("api_key"),
+            base_url=llm_config.get("base_url"),
+        )
     except Exception as exc:
         session_store.append_log(session_id, f"ERROR: Could not initialise LLM — {exc}")
         logger.error("session=%s prompt_optimizer LLM init failed: %s", session_id, exc)
@@ -132,16 +130,17 @@ def _accuracy_trajectory(record: dict) -> str:
     return "Accuracy trajectory: " + " → ".join(f"{a:.0%}" for a in seen)
 
 
-def _is_stagnant(record: dict, min_entries: int = 4) -> bool:
+def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     history = record.get("iteration_history", [])
     if len(history) < min_entries:
         return False
     recent = [h["accuracy"] for h in history[-min_entries:]]
-    return len(set(recent)) == 1
+    # Stagnant if improvement over last N iterations is less than 3 percentage points
+    return (max(recent) - min(recent)) < 0.03
 
 
 async def _optimise_description(
-    record: dict, user_answers: dict, llm: ChatOpenAI, session_id: str
+    record: dict, user_answers: dict, llm: BaseChatModel, session_id: str
 ) -> str:
     rule_type = record["rule_type"]
     clarifications = "\n".join(f"- {v}" for v in user_answers.values()) if user_answers else "None"
@@ -154,7 +153,11 @@ async def _optimise_description(
     else:
         constraints = (
             "The PASS_CRITERIA must be evaluable solely from transcript evidence. "
-            "Do not change evaluation_type, n_messages, or speaker."
+            "Do not change evaluation_type, n_messages, or speaker. "
+            "Do NOT include any language about inapplicability, the trigger condition being absent, "
+            "or 'when the scenario does not apply'. The trigger rule already handles Not Applicable "
+            "automatically — the description must only specify what constitutes adherence when the "
+            "scenario IS in scope."
         )
 
     trajectory = _accuracy_trajectory(record)
@@ -189,15 +192,8 @@ async def _optimise_description(
         "Respond with only the structured description, no preamble."
     )
 
-    try:
-        response = await llm.ainvoke([
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=prompt),
-        ])
-        return response.content.strip()
-    except Exception as exc:
-        logger.warning(
-            "session=%s rule_id=%s optimiser LLM failed: %s",
-            session_id, record["rule_id"], type(exc).__name__,
-        )
-        return record["current_description"]
+    response = await llm.ainvoke([
+        SystemMessage(content=_SYSTEM),
+        HumanMessage(content=prompt),
+    ])
+    return response.content.strip()

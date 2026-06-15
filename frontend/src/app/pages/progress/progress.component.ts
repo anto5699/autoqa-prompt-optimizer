@@ -5,6 +5,7 @@ import { Subscription, interval } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { SessionService } from '../../core/services/session.service';
 import { SseService } from '../../core/services/sse.service';
+import { ClarifyingQuestion } from '../../core/models/session.model';
 
 const PHASE_LABELS: Record<string, string> = {
   ingesting: 'Ingesting CSV',
@@ -19,7 +20,22 @@ const PHASE_LABELS: Record<string, string> = {
   error: 'Error',
 };
 
-const TERMINAL_PHASES = new Set(['complete', 'error']);
+const PHASE_LEVEL: Record<string, number> = {
+  ingesting: 0, detecting_ambiguity: 1, awaiting_clarification: 2,
+  generating_baselines: 3, evaluating: 4, benchmarking: 5,
+  analyzing_failures: 6, optimizing_prompts: 7, complete: 8,
+};
+
+const PIPELINE = [
+  { key: 'ingesting',          label: 'CSV Ingestion',       loop: false },
+  { key: 'detecting_ambiguity',label: 'Ambiguity Detection', loop: false },
+  { key: 'generating_baselines',label: 'Baseline Generation',loop: false },
+  { key: 'evaluating',         label: 'Evaluator',           loop: true  },
+  { key: 'benchmarking',       label: 'Benchmarking',        loop: true  },
+  { key: 'analyzing_failures', label: 'RCA Analysis',        loop: true  },
+  { key: 'optimizing_prompts', label: 'Prompt Optimizer',    loop: true  },
+  { key: 'complete',           label: 'Finalize',            loop: false },
+];
 
 @Component({
   selector: 'app-progress',
@@ -27,34 +43,103 @@ const TERMINAL_PHASES = new Set(['complete', 'error']);
   imports: [CommonModule],
   template: `
     <div class="page">
-      <h1>Optimization in Progress</h1>
-
-      <div class="phase-row">
-        <div class="phase-badge" [class.active]="isActive" [class.done]="phase === 'complete'" [class.err]="phase === 'error'">
-          <span class="pulse-dot" *ngIf="isActive"></span>
-          {{ phaseLabel }}
-        </div>
-        <span class="iteration-tag" *ngIf="iteration > 0">Iteration {{ iteration }}</span>
+      <div class="page-header">
+        <h1>Optimization Running</h1>
+        <p>The agent is iteratively evaluating conversations and refining your evaluation prompts.</p>
       </div>
 
-      <div class="log-box" #logBox>
-        <div *ngFor="let msg of log" class="log-line">{{ msg }}</div>
-        <div *ngIf="!log.length" class="log-line muted">Starting…</div>
-        <div *ngIf="isActive" class="log-line working">
-          <span class="blink">▋</span>&nbsp;Working…
+      <div class="layout">
+        <!-- Pipeline sidebar -->
+        <div class="pipeline-card">
+          <div class="pipeline-title">Agent Pipeline</div>
+          <ng-container *ngFor="let node of pipeline; let idx = index">
+            <div class="pipeline-node">
+              <div class="node-dot-wrap">
+                <div class="node-dot" [class.done]="isNodeDone(node.key)" [class.active]="phase === node.key">
+                  <ng-container *ngIf="isNodeDone(node.key)">✓</ng-container>
+                  <div *ngIf="phase === node.key && !isNodeDone(node.key)" class="node-dot-inner"></div>
+                  <ng-container *ngIf="!isNodeDone(node.key) && phase !== node.key">○</ng-container>
+                </div>
+                <div *ngIf="phase === node.key" class="node-ring"></div>
+              </div>
+              <div class="node-info">
+                <div class="node-label" [class.done]="isNodeDone(node.key)" [class.active]="phase === node.key">
+                  {{ node.label }}
+                </div>
+                <div *ngIf="node.loop && phase === node.key && iteration > 0" class="node-iter">
+                  Iteration {{ iteration }}
+                </div>
+              </div>
+              <span *ngIf="node.loop" class="node-loop">↺</span>
+            </div>
+            <div *ngIf="idx < pipeline.length - 1" class="node-connector" [class.done]="isNodeDone(node.key)"></div>
+          </ng-container>
+        </div>
+
+        <!-- Activity panel -->
+        <div class="activity">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="phase-pill" [class.complete]="phase==='complete'" [class.error-pill]="phase==='error'">
+              <span *ngIf="isActive" class="pulse-dot"></span>
+              {{ phaseLabel }}
+            </span>
+            <span *ngIf="iteration > 0" class="iter-tag">Iteration {{ iteration }}</span>
+          </div>
+
+          <div *ngIf="phase === 'awaiting_clarification' && clarifyingQuestions.length" class="clarification-card">
+            <div class="clarification-header">
+              <div class="clarification-icon">?</div>
+              <div>
+                <div class="clarification-title">Clarification Needed</div>
+                <div class="clarification-sub">The optimizer is stuck on the following parameters. Your answers will help it continue.</div>
+              </div>
+            </div>
+            <div *ngFor="let q of clarifyingQuestions; trackBy: trackByQuestion" class="clarification-question">
+              <div class="q-param">{{ q.parameter_name }}</div>
+              <div class="q-text">{{ q.question_text }}</div>
+              <textarea class="q-input" rows="3" placeholder="Your answer…"
+                [value]="pendingAnswers[q.question_id] || ''"
+                (input)="setAnswer(q.question_id, $event)"></textarea>
+            </div>
+            <button class="btn-clarify" [disabled]="!allAnswered()" (click)="submitClarification()">
+              Submit &amp; Continue
+            </button>
+          </div>
+
+          <div *ngIf="phase === 'error'" class="error-card">
+            <div class="error-card-header">
+              <span class="error-card-icon">✕</span>
+              <span class="error-card-title">Optimization failed</span>
+            </div>
+            <p class="error-card-body">{{ error || 'An unexpected error occurred. Check your API key and model configuration, then try again.' }}</p>
+            <button class="btn-start-over" (click)="startOver()">← Start Over</button>
+          </div>
+
+          <div class="log-box" #logBox>
+            <span *ngIf="!log.length && phase !== 'error'" class="log-empty">Initialising…</span>
+            <div *ngFor="let msg of log" class="log-line"
+                 [class.ok]="msg.includes('✓') || msg.includes('converged')"
+                 [class.err]="msg.includes('✗') || msg.includes('ERROR') || msg.includes('WARNING')">
+              <span class="log-prompt">›</span>{{ msg }}
+            </div>
+            <span *ngIf="isActive" class="log-cursor">▋</span>
+          </div>
+
+          <div *ngIf="params.length" class="acc-card">
+            <div class="acc-title">Parameter Accuracy</div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div *ngFor="let p of params" class="acc-row">
+                <code class="acc-rule-id">{{ p.rule_id }}</code>
+                <div class="acc-track">
+                  <div class="acc-fill" [style.width.%]="p.accuracy * 100" [style.background]="accColor(p.accuracy)"></div>
+                </div>
+                <span class="acc-val" [style.color]="accColor(p.accuracy)">{{ (p.accuracy * 100).toFixed(1) }}%</span>
+                <span class="acc-check">{{ p.accuracy >= 0.90 ? '✓' : '' }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <div class="params" *ngIf="params.length">
-        <h2>Rule Accuracy</h2>
-        <div *ngFor="let p of params" class="param-row">
-          <span class="rule-id">{{ p.rule_id }}</span>
-          <span class="badge" [class]="statusClass(p.accuracy)">{{ (p.accuracy * 100).toFixed(1) }}%</span>
-          <span class="status-text">{{ p.status }}</span>
-        </div>
-      </div>
-
-      <div *ngIf="error" class="error">{{ error }}</div>
     </div>
   `,
   styleUrls: ['./progress.component.css']
@@ -65,9 +150,14 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   params: { rule_id: string; accuracy: number; status: string }[] = [];
   iteration = 0;
   error = '';
+  pipeline = PIPELINE;
+  clarifyingQuestions: ClarifyingQuestion[] = [];
+  pendingAnswers: Record<string, string> = {};
+  private maxLevel = 0;
   private subs = new Subscription();
   private sessionId = '';
   private shouldScroll = false;
+  private awaitingResume = false;
 
   @ViewChild('logBox') private logBox!: ElementRef<HTMLElement>;
 
@@ -78,12 +168,17 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     private sse: SseService,
   ) {}
 
-  get phaseLabel(): string {
-    return PHASE_LABELS[this.phase] ?? this.phase.replace(/_/g, ' ');
+  get phaseLabel(): string { return PHASE_LABELS[this.phase] ?? this.phase.replace(/_/g, ' '); }
+  get isActive(): boolean  { return !['complete', 'error'].includes(this.phase); }
+
+  isNodeDone(key: string): boolean {
+    const nodeLv = PHASE_LEVEL[key] ?? 0;
+    const curLv  = PHASE_LEVEL[this.phase] ?? 0;
+    return nodeLv < curLv;
   }
 
-  get isActive(): boolean {
-    return !TERMINAL_PHASES.has(this.phase);
+  accColor(acc: number): string {
+    return acc >= 0.90 ? '#16a34a' : acc >= 0.75 ? '#d97706' : '#dc2626';
   }
 
   ngOnInit() {
@@ -93,11 +188,10 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.sse.connect(this.sessionId).subscribe({
         next: evt => {
           if (evt.type === 'progress') {
-            this.phase = evt.data['phase'] as string;
-            if (evt.data['message']) {
-              this.log.push(evt.data['message'] as string);
-              this.shouldScroll = true;
+            if (this.phase !== 'awaiting_clarification') {
+              this.phase = evt.data['phase'] as string;
             }
+            if (evt.data['message']) { this.log.push(evt.data['message'] as string); this.shouldScroll = true; }
           }
           if (evt.type === 'complete') this.router.navigate([`/results/${this.sessionId}`]);
           if (evt.type === 'error') this.error = evt.data['message'] as string;
@@ -109,15 +203,23 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.subs.add(
       interval(3000).pipe(switchMap(() => this.svc.getSession(this.sessionId))).subscribe({
         next: s => {
-          if (s.current_phase === 'awaiting_clarification' && s.clarifying_questions?.length) {
-            this.router.navigate([`/clarification/${this.sessionId}`]);
-            return;
-          }
           this.phase = s.current_phase;
           this.iteration = s.current_iteration;
           this.params = Object.entries(s.parameter_summary).map(([rule_id, v]) => ({
-            rule_id, accuracy: v.accuracy, status: v.status
+            rule_id, accuracy: v.accuracy, status: v.status,
           }));
+          if (s.current_phase === 'awaiting_clarification' && !this.awaitingResume) {
+            if (!this.clarifyingQuestions.length) {
+              this.clarifyingQuestions = s.clarifying_questions ?? [];
+            }
+          } else if (s.current_phase !== 'awaiting_clarification') {
+            this.awaitingResume = false;
+            this.clarifyingQuestions = [];
+          }
+          if (s.current_phase === 'error' && s.error_message) {
+            this.error = s.error_message;
+          }
+          if (s.current_phase === 'complete') this.router.navigate([`/results/${this.sessionId}`]);
         }
       })
     );
@@ -131,7 +233,29 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  ngOnDestroy() { this.subs.unsubscribe(); }
+  setAnswer(questionId: string, event: Event) {
+    this.pendingAnswers[questionId] = (event.target as HTMLTextAreaElement).value;
+  }
 
-  statusClass(acc: number) { return acc >= 0.8 ? 'green' : acc >= 0.7 ? 'amber' : 'red'; }
+  allAnswered(): boolean {
+    return this.clarifyingQuestions.length > 0 &&
+      this.clarifyingQuestions.every(q => (this.pendingAnswers[q.question_id] || '').trim().length > 0);
+  }
+
+  submitClarification() {
+    const answers: Record<string, string> = {};
+    for (const q of this.clarifyingQuestions) {
+      answers[q.parameter_name] = (this.pendingAnswers[q.question_id] || '').trim();
+    }
+    this.awaitingResume = true;
+    this.clarifyingQuestions = [];
+    this.pendingAnswers = {};
+    this.svc.submitAnswers(this.sessionId, answers).subscribe();
+  }
+
+  trackByQuestion = (_: number, q: ClarifyingQuestion) => q.question_id;
+
+  startOver() { this.router.navigate(['/upload']); }
+
+  ngOnDestroy() { this.subs.unsubscribe(); }
 }

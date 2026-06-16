@@ -95,7 +95,10 @@ const PIPELINE = [
               </div>
             </div>
             <div *ngFor="let q of clarifyingQuestions; trackBy: trackByQuestion" class="clarification-question">
-              <div class="q-param">{{ q.parameter_name }}</div>
+              <div class="q-param">
+                {{ cleanParamName(q.parameter_name) }}
+                <span *ngIf="ruleTypeBadge(q.parameter_name)" class="q-rule-type">{{ ruleTypeBadge(q.parameter_name) }}</span>
+              </div>
               <div class="q-text">{{ q.question_text }}</div>
               <textarea class="q-input" rows="3" placeholder="Your answer…"
                 [value]="pendingAnswers[q.question_id] || ''"
@@ -138,6 +141,18 @@ const PIPELINE = [
               </div>
             </div>
           </div>
+
+          <div *ngIf="rcaParams.length" class="rca-panel">
+            <div class="rca-panel-title">Why These Parameters Are Struggling</div>
+            <div *ngFor="let p of rcaParams" class="rca-item">
+              <div class="rca-item-header">
+                <code class="acc-rule-id">{{ cleanParamName(p.rule_id) }}</code>
+                <span *ngIf="ruleTypeBadge(p.rule_id)" class="q-rule-type">{{ ruleTypeBadge(p.rule_id) }}</span>
+                <span class="rca-accuracy-badge" [style.color]="accColor(p.accuracy)">{{ (p.accuracy * 100).toFixed(1) }}%</span>
+              </div>
+              <pre class="rca-text">{{ p.rca_findings }}</pre>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -147,7 +162,7 @@ const PIPELINE = [
 export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   phase = 'ingesting';
   log: string[] = [];
-  params: { rule_id: string; accuracy: number; status: string }[] = [];
+  params: { rule_id: string; accuracy: number; status: string; rca_findings?: string }[] = [];
   iteration = 0;
   error = '';
   pipeline = PIPELINE;
@@ -181,6 +196,12 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     return acc >= 0.90 ? '#16a34a' : acc >= 0.75 ? '#d97706' : '#dc2626';
   }
 
+  get rcaParams(): { rule_id: string; accuracy: number; status: string; rca_findings: string }[] {
+    return this.params.filter(
+      p => p.rca_findings && p.status !== 'converged'
+    ) as { rule_id: string; accuracy: number; status: string; rca_findings: string }[];
+  }
+
   ngOnInit() {
     this.sessionId = this.route.snapshot.params['sessionId'];
 
@@ -206,7 +227,7 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.phase = s.current_phase;
           this.iteration = s.current_iteration;
           this.params = Object.entries(s.parameter_summary).map(([rule_id, v]) => ({
-            rule_id, accuracy: v.accuracy, status: v.status,
+            rule_id, accuracy: v.accuracy, status: v.status, rca_findings: v.rca_findings,
           }));
           if (s.current_phase === 'awaiting_clarification' && !this.awaitingResume) {
             if (!this.clarifyingQuestions.length) {
@@ -245,12 +266,22 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   submitClarification() {
     const answers: Record<string, string> = {};
     for (const q of this.clarifyingQuestions) {
-      answers[q.parameter_name] = (this.pendingAnswers[q.question_id] || '').trim();
+      answers[q.question_id] = (this.pendingAnswers[q.question_id] || '').trim();
     }
     this.awaitingResume = true;
     this.clarifyingQuestions = [];
     this.pendingAnswers = {};
     this.svc.submitAnswers(this.sessionId, answers).subscribe();
+  }
+
+  cleanParamName(name: string): string {
+    return name.replace(/__answer$/, '').replace(/__trigger$/, '');
+  }
+
+  ruleTypeBadge(name: string): string {
+    if (name.endsWith('__answer')) return 'Answer Rule';
+    if (name.endsWith('__trigger')) return 'Trigger Rule';
+    return '';
   }
 
   trackByQuestion = (_: number, q: ClarifyingQuestion) => q.question_id;

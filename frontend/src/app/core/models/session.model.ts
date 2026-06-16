@@ -2,6 +2,10 @@ export interface ModelConfig {
   model: string;
   apiKey: string;
   baseUrl: string;
+  optimizerModel: string;
+  useCustomOptimizerEndpoint: boolean;
+  optimizerApiKey: string;
+  optimizerBaseUrl: string;
 }
 
 export interface ModelConfigValidateResponse {
@@ -33,6 +37,7 @@ export interface ClarifyingQuestion {
 export interface ParameterSummary {
   accuracy: number;
   status: string;
+  rca_findings?: string;
 }
 
 export interface CreateSessionResponse {

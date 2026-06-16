@@ -52,6 +52,9 @@ async def create_session(
     model_name: str = Form(""),
     api_key_override: str = Form(""),
     base_url: str = Form(""),
+    optimizer_model_name: Optional[str] = Form(None),
+    optimizer_api_key_override: Optional[str] = Form(None),
+    optimizer_base_url: Optional[str] = Form(None),
 ) -> CreateSessionResponse:
     if max_iterations < 1 or max_iterations > 10:
         raise HTTPException(status_code=400, detail="max_iterations must be between 1 and 10")
@@ -83,7 +86,14 @@ async def create_session(
         "_max_iterations": max_iterations,
         "_accuracy_target": accuracy_target,
         "_language": language,
-        "_llm_config": {"model": model_name, "api_key": api_key_override, "base_url": base_url},
+        "_llm_config": {
+            "model": model_name,
+            "api_key": api_key_override,
+            "base_url": base_url,
+            "optimizer_model": optimizer_model_name or "",
+            "optimizer_api_key": optimizer_api_key_override or "",
+            "optimizer_base_url": optimizer_base_url or "",
+        },
     })
 
     parameter_infos = [
@@ -220,6 +230,7 @@ async def get_session(session_id: str) -> SessionStatusResponse:
         parameter_summary[rule_id] = ParameterSummary(
             accuracy=record.get("current_accuracy", 0.0),
             status=record.get("status", "pending"),
+            rca_findings=record.get("rca_findings"),
         )
 
     na_detected = set(session.get("_na_detected_parameters", []))
@@ -393,6 +404,19 @@ async def get_report(session_id: str):
         return ReportInProgressResponse(status="in_progress", current_phase=phase)
 
     return live.get("final_report", {})
+
+
+@router.get("/{session_id}/trace")
+async def get_trace(session_id: str):
+    session = session_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session_id,
+        "models_used": session.get("models_used", {}),
+        "trace_log": session.get("trace_log", []),
+        "progress_log": session.get("progress_log", []),
+    }
 
 
 @router.delete("/{session_id}", status_code=204)

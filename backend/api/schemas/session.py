@@ -25,6 +25,7 @@ class CreateSessionResponse(BaseModel):
 class ParameterSummary(BaseModel):
     accuracy: float
     status: str
+    rca_findings: Optional[str] = None
 
 
 class SessionStatusResponse(BaseModel):

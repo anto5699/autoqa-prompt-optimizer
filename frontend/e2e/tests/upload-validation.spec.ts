@@ -9,28 +9,42 @@ test.describe('Upload page validation', () => {
   });
 
   test('Start Optimization is disabled with no file selected', async ({ page }) => {
-    const btn = page.getByRole('button', { name: /Start Optimization/i });
-    await expect(btn).toBeDisabled();
+    await expect(page.locator('.cta-btn')).toBeDisabled();
   });
 
   test('Start Optimization becomes enabled after selecting a CSV file', async ({ page }) => {
-    const btn = page.getByRole('button', { name: /Start Optimization/i });
-    await expect(btn).toBeDisabled();
-
+    await expect(page.locator('.cta-btn')).toBeDisabled();
     await page.locator('input[type="file"]').setInputFiles(FIXTURE);
-
-    await expect(btn).toBeEnabled();
+    await expect(page.locator('.cta-btn')).toBeEnabled();
   });
 
-  test('max iterations input enforces min=1 max=10 via HTML attributes', async ({ page }) => {
-    const iterationsInput = page.locator('input[type="number"]').first();
-    await expect(iterationsInput).toHaveAttribute('min', '1');
-    await expect(iterationsInput).toHaveAttribute('max', '10');
+  test('max iterations slider has min=1 max=10', async ({ page }) => {
+    const slider = page.locator('input[type="range"]');
+    await expect(slider).toHaveAttribute('min', '1');
+    await expect(slider).toHaveAttribute('max', '10');
+    await expect(slider).toHaveValue('8'); // default
   });
 
-  test('accuracy target input enforces min=0.1 max=1', async ({ page }) => {
-    const accuracyInput = page.locator('input[type="number"]').last();
-    await expect(accuracyInput).toHaveAttribute('min', '0.1');
-    await expect(accuracyInput).toHaveAttribute('max', '1');
+  test('accuracy target has four preset buttons and defaults to 90%', async ({ page }) => {
+    for (const label of ['70%', '80%', '90%', '95%']) {
+      await expect(page.getByRole('button', { name: label })).toBeVisible();
+    }
+    await expect(page.getByRole('button', { name: '90%' })).toHaveClass(/active/);
+  });
+
+  test('clicking an accuracy target button marks it active', async ({ page }) => {
+    await page.getByRole('button', { name: '70%' }).click();
+    await expect(page.getByRole('button', { name: '70%' })).toHaveClass(/active/);
+    await expect(page.getByRole('button', { name: '90%' })).not.toHaveClass(/active/);
+  });
+
+  test('CSV format panel toggles open and closed', async ({ page }) => {
+    const toggle = page.getByRole('button', { name: /View expected CSV format/i });
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    await expect(page.locator('.format-panel')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Hide expected CSV format/i })).toBeVisible();
+    await page.getByRole('button', { name: /Hide expected CSV format/i }).click();
+    await expect(page.locator('.format-panel')).not.toBeVisible();
   });
 });

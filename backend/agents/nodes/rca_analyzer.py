@@ -23,6 +23,13 @@ async def rca_analyzer(state: OptimizationState) -> dict:
     session_store.update(session_id, {"current_phase": "analyzing_failures"})
     session_store.append_log(session_id, f"Iteration {iteration}: analysing failures for {len(state['parameters_below_target'])} rule(s)…")
 
+    llm_config = state.get("llm_config", {})
+    llm = get_llm(
+        model=llm_config.get("model"),
+        api_key=llm_config.get("api_key"),
+        base_url=llm_config.get("base_url"),
+    )
+
     records = dict(state["parameter_records"])
     ground_truth_map = state["ground_truth_map"]
     conversations_by_id = {c["conversation_id"]: c for c in state["conversations"]}
@@ -34,7 +41,7 @@ async def rca_analyzer(state: OptimizationState) -> dict:
         error_cases = _collect_error_cases(
             rule_id, record["current_predictions"], ground_truth_map, conversations_by_id
         )
-        findings = await _run_rca(rule_id, record, error_cases, session_id)
+        findings = await _run_rca(rule_id, record, error_cases, session_id, llm)
         records[rule_id] = {**record, "rca_findings": findings}
         logger.info("session=%s rule_id=%s RCA complete", session_id, rule_id)
 
@@ -83,7 +90,7 @@ def _format_transcript(messages: list[dict]) -> str:
 
 
 async def _run_rca(
-    rule_id: str, record: dict, error_cases: list[dict], session_id: str
+    rule_id: str, record: dict, error_cases: list[dict], session_id: str, llm
 ) -> str:
     rule_type = record["rule_type"]
 
@@ -132,12 +139,8 @@ async def _run_rca(
         "and what specifically needs to change in the description."
     )
 
-    try:
-        response = await get_llm().ainvoke([
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=prompt),
-        ])
-        return response.content.strip()
-    except Exception as exc:
-        logger.warning("session=%s rule_id=%s RCA LLM failed: %s", session_id, rule_id, type(exc).__name__)
-        return f"RCA unavailable ({len(error_cases)} errors observed)."
+    response = await llm.ainvoke([
+        SystemMessage(content=_SYSTEM),
+        HumanMessage(content=prompt),
+    ])
+    return response.content.strip()

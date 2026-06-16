@@ -1,16 +1,29 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { SessionService } from '../../core/services/session.service';
 import { ClarifyingQuestion } from '../../core/models/session.model';
 
 @Component({
   selector: 'app-clarification',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="page">
+      <div *ngIf="loadingQuestions" class="loading-questions">
+        <span class="spinner"></span> Analyzing your descriptions for ambiguities…
+      </div>
+
+      <div *ngIf="!loadingQuestions && error" class="error-msg">
+        {{ error }}
+        <ng-container *ngIf="sessionExpired">
+          <br><a class="restart-link" routerLink="/upload">← Start over with a new upload</a>
+        </ng-container>
+      </div>
+
+      <ng-container *ngIf="!loadingQuestions && !sessionExpired">
       <div class="page-header">
         <h1>Answer {{ questions.length }} Clarifying Questions</h1>
         <p>Before optimization begins, the AI identified semantic ambiguities in your descriptions that could cause misclassifications. Your answers will be injected into the evaluation prompts.</p>
@@ -53,39 +66,63 @@ import { ClarifyingQuestion } from '../../core/models/session.model';
         </div>
       </ng-container>
 
-      <div *ngIf="error" class="error-msg">{{ error }}</div>
       <div class="footer">
         <button [disabled]="!allAnswered || loading" (click)="submit()">
           {{ loading ? 'Submitting…' : 'Start Optimization' }} <span style="font-size:1.1rem">→</span>
         </button>
       </div>
+      </ng-container>
     </div>
   `,
   styleUrls: ['./clarification.component.css']
 })
-export class ClarificationComponent implements OnInit {
+export class ClarificationComponent implements OnInit, OnDestroy {
   questions: ClarifyingQuestion[] = [];
   answers: Record<string, string> = {};
+  groups: { paramName: string; ruleType: string; questions: ClarifyingQuestion[] }[] = [];
   loading = false;
+  loadingQuestions = true;
   error = '';
+  sessionExpired = false;
   private sessionId = '';
+  private sub: Subscription | null = null;
 
   constructor(private route: ActivatedRoute, private svc: SessionService, private router: Router) {}
 
   ngOnInit() {
     this.sessionId = this.route.snapshot.params['sessionId'];
-    this.svc.getSession(this.sessionId).subscribe({
+    this.sub = this.svc.getSession(this.sessionId).subscribe({
       next: s => {
-        this.questions = s.clarifying_questions;
-        this.questions.forEach(q => this.answers[q.question_id] = '');
+        if (s.clarifying_questions?.length) {
+          this.questions = s.clarifying_questions;
+          this.questions.forEach(q => this.answers[q.question_id] = '');
+          this.groups = this.buildGroups(this.questions);
+          this.loadingQuestions = false;
+        } else {
+          // No questions — descriptions component should have routed here only with questions;
+          // fall back to progress if something unexpected happened.
+          this.router.navigate([`/progress/${this.sessionId}`]);
+        }
       },
-      error: () => this.error = 'Failed to load session'
+      error: (e: any) => {
+        this.loadingQuestions = false;
+        if (e?.status === 404) {
+          this.sessionExpired = true;
+          this.error = 'Session not found — the server may have restarted. Please start over.';
+        } else {
+          this.error = e?.error?.detail || 'Failed to load session';
+        }
+      }
     });
   }
 
-  get groups(): { paramName: string; ruleType: string; questions: ClarifyingQuestion[] }[] {
+  ngOnDestroy() {
+    this.sub?.unsubscribe();
+  }
+
+  private buildGroups(questions: ClarifyingQuestion[]): { paramName: string; ruleType: string; questions: ClarifyingQuestion[] }[] {
     const map = new Map<string, ClarifyingQuestion[]>();
-    for (const q of this.questions) {
+    for (const q of questions) {
       if (!map.has(q.parameter_name)) map.set(q.parameter_name, []);
       map.get(q.parameter_name)!.push(q);
     }
@@ -101,14 +138,22 @@ export class ClarificationComponent implements OnInit {
   }
 
   get allAnswered(): boolean {
-    return this.questions.every(q => this.answers[q.question_id]?.trim());
+    return this.questions.length > 0 && this.questions.every(q => this.answers[q.question_id]?.trim());
   }
 
   submit() {
     this.loading = true;
     this.svc.submitAnswers(this.sessionId, this.answers).subscribe({
       next: () => this.router.navigate([`/progress/${this.sessionId}`]),
-      error: () => { this.error = 'Submission failed'; this.loading = false; }
+      error: (e: any) => {
+        this.loading = false;
+        if (e?.status === 404) {
+          this.sessionExpired = true;
+          this.error = 'Session not found — the server may have restarted. Please start over.';
+        } else {
+          this.error = e?.error?.detail || 'Submission failed';
+        }
+      }
     });
   }
 }

@@ -59,21 +59,29 @@ async def evaluator(state: OptimizationState) -> dict:
         f"{len(records) - len(rules_to_evaluate)} converged/locked)…",
     )
 
+    llm_config = state.get("llm_config", {})
+    llm = get_llm(
+        model=llm_config.get("model"),
+        api_key=llm_config.get("api_key"),
+        base_url=llm_config.get("base_url"),
+    )
     semaphore = asyncio.Semaphore(settings.max_concurrent_llm_calls)
 
     async def evaluate_one(conv: dict[str, Any]) -> tuple[str, list]:
         async with semaphore:
-            return await _evaluate_conversation(conv, rules_to_evaluate, system_prompt, language)
+            return await _evaluate_conversation(conv, rules_to_evaluate, system_prompt, language, llm)
 
     tasks = [evaluate_one(conv) for conv in conversations]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    failure_count = 0
     for conv, result in zip(conversations, results):
         conv_id = conv["conversation_id"]
         if isinstance(result, Exception):
+            failure_count += 1
             logger.warning(
                 "session=%s conversation_id=%s evaluation error: %s",
-                session_id, conv_id, type(result).__name__,
+                session_id, conv_id, result,
             )
             for rule_id in rules_to_evaluate:
                 records[rule_id]["current_predictions"][conv_id] = "No"
@@ -86,13 +94,24 @@ async def evaluator(state: OptimizationState) -> dict:
                 is_qualified = rule_result.get("isQualified", False)
                 records[rule_id]["current_predictions"][conv_id] = "Yes" if is_qualified else "No"
 
+    if failure_count == len(conversations):
+        raise RuntimeError(
+            f"Evaluation failed: all {len(conversations)} conversation LLM calls returned errors"
+        )
+
+    failure_note = (
+        [f"WARNING: {failure_count}/{len(conversations)} conversation(s) failed LLM evaluation — defaulted to Not Adhered"]
+        if failure_count
+        else []
+    )
+
     return {
         "parameter_records": records,
         "current_phase": "benchmarking",
         "progress_log": [
             f"Iteration {iteration}: evaluated {len(conversations)} conversations "
             f"across {len(rules_to_evaluate)} active rule(s)"
-        ],
+        ] + failure_note,
     }
 
 
@@ -101,6 +120,7 @@ async def _evaluate_conversation(
     parameter_records: dict,
     system_prompt: str,
     language: str,
+    llm,
 ) -> tuple[str, list]:
     conv_id = conv["conversation_id"]
 
@@ -121,7 +141,7 @@ async def _evaluate_conversation(
         f"Language: {language}"
     )
 
-    response = await get_llm().ainvoke([
+    response = await llm.ainvoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_content),
     ])

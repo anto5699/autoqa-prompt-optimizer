@@ -1,0 +1,114 @@
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.topbar-logo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 40px;
+  height: 56px;
+}
+
+.topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.logo-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #111827;
+  letter-spacing: -0.01em;
+}
+
+.logo-sub {
+  font-size: 0.82rem;
+  color: #9ca3af;
+}
+
+.session-chip {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: #9ca3af;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.stepbar-row {
+  padding: 10px 0 14px;
+  border-top: 1px solid #f3f4f6;
+  background: #fafafa;
+  display: flex;
+  justify-content: center;
+}
+
+.stepbar {
+  display: flex;
+  align-items: center;
+}
+
+.step-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.step-circle {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #f3f4f6;
+  color: #9ca3af;
+  transition: all 0.3s;
+}
+
+.step-circle.done  { background: #4f46e5; color: #fff; }
+.step-circle.active { background: #4f46e5; color: #fff; box-shadow: 0 0 0 4px rgba(79,70,229,0.15); }
+
+.step-label {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: #9ca3af;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.step-label.active { font-weight: 600; color: #4f46e5; }
+.step-label.done   { color: #6b7280; }
+
+.step-connector {
+  width: 52px;
+  height: 2px;
+  margin: 0 2px;
+  margin-bottom: 20px;
+  background: #e5e7eb;
+  transition: background 0.3s;
+  flex-shrink: 0;
+}
+
+.step-connector.done { background: #4f46e5; }

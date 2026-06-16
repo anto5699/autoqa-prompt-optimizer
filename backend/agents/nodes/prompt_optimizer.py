@@ -56,6 +56,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
     records = dict(state["parameter_records"])
     below_target = state["parameters_below_target"]
     user_answers = state.get("user_answers", {})
+    qid_to_param = {q["question_id"]: q["parameter_name"] for q in state.get("clarifying_questions", [])}
     iteration = state["current_iteration"]
 
     session_store.update(session_id, {
@@ -96,7 +97,8 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
             "f1": record["current_f1"],
         }
 
-        new_description = await _optimise_description(record, user_answers, llm, session_id)
+        rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
+        new_description = await _optimise_description(record, rule_answers, llm, session_id)
 
         records[rule_id] = {
             **record,

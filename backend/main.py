@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.routes.config import router as config_router
 from api.routes.sessions import router as sessions_router
 from api.routes.stream import router as stream_router
 from config import settings
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(config_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
 

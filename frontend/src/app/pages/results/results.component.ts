@@ -21,10 +21,13 @@ type FilterKey = 'all' | 'converged' | 'not-met';
         </div>
         <div class="header-btns">
           <button class="export-btn" [class.exported]="exported" (click)="exportCsv()">
-            {{ exported ? '✓ Exported' : '↓ Export CSV' }}
+            {{ exported ? '✓ Exported' : '↓ Export Evaluations CSV' }}
+          </button>
+          <button class="export-btn" [class.exported]="exportedPrompts" (click)="exportPromptsCsv()">
+            {{ exportedPrompts ? '✓ Exported' : '↓ Export Prompts CSV' }}
           </button>
           <button class="export-btn pdf-btn" (click)="exportPdf()">
-            ↗ Export PDF
+            ↗ Export Report PDF
           </button>
         </div>
       </div>
@@ -203,6 +206,7 @@ type FilterKey = 'all' | 'converged' | 'not-met';
             </div>
           </div>
         </div>
+      </div>
       <!-- Continue Optimization panel — shown when unconverged params exist -->
       <div *ngIf="unconvergedParams.length > 0" class="continue-panel">
         <h3 class="continue-title">Continue Optimization</h3>
@@ -237,6 +241,7 @@ export class ResultsComponent implements OnInit {
   showConvs: Record<string, boolean> = {};
   copied: Record<string, boolean> = {};
   exported = false;
+  exportedPrompts = false;
   filter: FilterKey = 'all';
   error = '';
   additionalIterations = 5;
@@ -343,13 +348,51 @@ export class ResultsComponent implements OnInit {
 
   exportCsv() {
     if (!this.report) return;
-    const rows = ['rule_id,conversation_id,ground_truth,prediction,correct'];
-    for (const [ruleId, param] of Object.entries(this.report.parameters)) {
-      for (const c of param.conversation_results ?? []) {
-        const correct = c.correct === null ? 'NA' : c.correct ? 'true' : 'false';
-        rows.push(`${ruleId},${c.conversation_id},${c.ground_truth},${c.prediction},${correct}`);
+
+    // Wide format: one row per conversation, one column-group per rule
+    const ruleIds = Object.keys(this.report.parameters).sort();
+
+    // Collect conversation IDs in stable order from the first rule that has results
+    const convIds: string[] = [];
+    const seen = new Set<string>();
+    for (const ruleId of ruleIds) {
+      for (const c of this.report.parameters[ruleId].conversation_results ?? []) {
+        if (!seen.has(c.conversation_id)) {
+          seen.add(c.conversation_id);
+          convIds.push(c.conversation_id);
+        }
       }
     }
+
+    // Build lookup: ruleId → conversationId → result
+    const lookup: Record<string, Record<string, { ground_truth: string; prediction: string; correct: boolean | null }>> = {};
+    for (const ruleId of ruleIds) {
+      lookup[ruleId] = {};
+      for (const c of this.report.parameters[ruleId].conversation_results ?? []) {
+        lookup[ruleId][c.conversation_id] = c;
+      }
+    }
+
+    const headers = ['conversation_id'];
+    for (const ruleId of ruleIds) {
+      headers.push(`${ruleId}_ground_truth`, `${ruleId}_prediction`, `${ruleId}_correct`);
+    }
+
+    const rows = [headers.join(',')];
+    for (const convId of convIds) {
+      const row: string[] = [convId];
+      for (const ruleId of ruleIds) {
+        const c = lookup[ruleId]?.[convId];
+        if (c) {
+          const correct = c.correct === null ? 'NA' : c.correct ? 'true' : 'false';
+          row.push(c.ground_truth, c.prediction, correct);
+        } else {
+          row.push('', '', '');
+        }
+      }
+      rows.push(row.join(','));
+    }
+
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -381,6 +424,25 @@ export class ResultsComponent implements OnInit {
         this.continuing = false;
       },
     });
+  }
+
+  exportPromptsCsv() {
+    if (!this.report) return;
+    const rows = ['parameter_name,rule_type,optimised_prompt'];
+    for (const [ruleId, param] of Object.entries(this.report.parameters)) {
+      const ruleType = ruleId.includes('_trigger_') ? 'trigger' : 'answer';
+      const safePrompt = (param.final_prompt ?? '').replace(/"/g, '""');
+      rows.push(`${ruleId},${ruleType},"${safePrompt}"`);
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `optimised-prompts-${this.report.session_id.slice(0, 8)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    this.exportedPrompts = true;
+    setTimeout(() => this.exportedPrompts = false, 2500);
   }
 
   exportPdf() {

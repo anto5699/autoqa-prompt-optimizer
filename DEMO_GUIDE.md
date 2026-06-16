@@ -27,7 +27,7 @@ uvicorn main:app --reload --port 8000
 
 # Terminal 2 — Frontend
 cd autoqa-prompt-optimizer/frontend
-ng serve --proxy-config proxy.conf.json
+npx ng serve --proxy-config proxy.conf.json
 ```
 
 Open `http://localhost:4200` and confirm the upload screen is visible.
@@ -133,17 +133,22 @@ Expected baseline accuracy (approximate):
 ## Step 5 — View the Report
 
 **What to say:**
-> "The final report shows exactly what changed, why it changed, and what accuracy each rule reached. It's auditable — you can trace every decision from the initial description through to the final prompt."
+> "The final report shows exactly what changed, why it changed, and what accuracy each rule reached. It's auditable — you can trace every decision from the initial description through to the final prompt. And everything is exportable."
 
 **Things to point out in the report:**
 
-1. **Convergence table** — which rules hit 90% and which didn't, with final accuracy and status.
+1. **Convergence table** — which rules hit 90% and which didn't, with initial accuracy, final accuracy, improvement, precision, and recall.
 
-2. **Per-rule descriptions** — show the initial vs final description for `rule_answer_1`. The final version will have specific PASS_CRITERIA about agent name-stating, with concrete transcript examples.
+2. **Per-rule detail** — show the before/after for `rule_answer_1`. The "What changed" box summarises the optimizer's reasoning. Below it, the original description sits alongside the final structured prompt — both are selectable and copyable.
 
-3. **Accuracy trajectory** — for any rule that took multiple iterations, show the iteration-by-iteration improvement.
+3. **Accuracy trajectory** — for any rule that took multiple iterations, the trend chart shows the iteration-by-iteration improvement.
 
 4. **Rules that converged early** — `rule_trigger_4` typically converges at iteration 0 if the description is semantically aligned. Point out the system is smart enough not to touch what's already working.
+
+**Export options (demonstrate each):**
+- **Export Evaluations CSV** — downloads a wide-format CSV: one row per conversation, with ground truth, prediction, and correct columns for each rule. Useful for audit or further analysis.
+- **Export Prompts CSV** — downloads just the optimised prompt text for each rule, with parameter name and rule type. Ready to paste directly into your evaluation system.
+- **Export Report PDF** — opens the print dialog pre-formatted as an infographic: summary KPIs, before/after comparison, confusion matrices, trend charts, and full prompt text.
 
 **Talking point:** This entire process — from upload to convergence — took under 5 minutes and produced prompts that achieve >90% accuracy. The equivalent manual process (iterating on prompts with a human analyst and re-running evaluations) typically takes days.
 

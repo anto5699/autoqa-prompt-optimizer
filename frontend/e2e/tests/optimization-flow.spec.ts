@@ -1,143 +1,179 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import path from 'path';
 
 const FIXTURE = path.join(__dirname, '../fixtures/test_conversations.csv');
 
-test('full optimization flow with real OpenAI', async ({ page }) => {
-  const apiKey = process.env['OPENAI_API_KEY'];
-  if (!apiKey) test.skip();
+// Unambiguous description — achieves high accuracy so the test finishes in 1 iteration.
+const ANSWER_DESC =
+  "Evaluate whether the agent's very first message includes BOTH: " +
+  "(1) a greeting phrase — 'hello', 'hi', 'good morning', 'good afternoon', or 'welcome' — " +
+  "AND (2) the agent's own first name. Both must be present in that single opening message to Adhere.";
 
-  // ── 1. Upload page ─────────────────────────────────────────────────────────
-  await page.goto('/upload');
-  await expect(page.getByRole('heading', { name: 'AutoQA Prompt Optimizer' })).toBeVisible();
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-  // ── 2. Set model config via Angular component API (fill() is unreliable with ngModel) ──
-  await page.evaluate((key) => {
-    const appEl = document.querySelector('app-upload');
-    const ng = (window as any).ng;
-    if (!appEl || !ng?.getComponent) return;
-    const comp = ng.getComponent(appEl);
-    if (!comp?.modelConfig) return;
-    comp.modelConfig.model = 'gpt-4o';
-    comp.modelConfig.apiKey = key;
-    ng.applyChanges(comp);
-  }, apiKey!);
-
-  // ── 3. Verify connection ────────────────────────────────────────────────────
-  await page.getByRole('button', { name: /Test Connection/i }).click();
-  await expect(page.locator('.conn-success')).toContainText('Connected', { timeout: 30_000 });
-
-  // ── 4. Upload fixture CSV ───────────────────────────────────────────────────
-  await page.locator('input[type="file"]').setInputFiles(FIXTURE);
-
-  // ── 5. Set minimal iterations so the test finishes quickly ──────────────────
-  await page.locator('input[type="number"]').first().fill('1');   // max_iterations
-  await page.locator('input[type="number"]').last().fill('0.5');  // accuracy_target
-
-  // ── 6. Start optimization — lands on /descriptions/:id ─────────────────────
-  await page.getByRole('button', { name: /Start Optimization/i }).click();
-  await page.waitForURL(/\/descriptions\//, { timeout: 30_000 });
-  await expect(page.getByRole('heading', { name: 'Define Parameter Descriptions' })).toBeVisible();
-
-  // ── 7+8. Fill descriptions and submit via Angular component API ────────────
-  // Angular's [(ngModel)] binding is unreliable with Playwright fill() —
-  // use ng.getComponent (available in dev-mode ng serve) to set state directly.
-  // Wait for getSession() to complete (rules loaded) before setting descriptions.
-  await page.waitForFunction(() => {
-    const appEl = document.querySelector('app-descriptions');
-    const ng = (window as any).ng;
-    if (!appEl || !ng?.getComponent) return false;
-    const comp = ng.getComponent(appEl);
-    return comp?.rules?.length > 0 && !comp.loading;
-  }, { timeout: 15_000 });
-
-  await page.evaluate((desc) => {
-    const appEl = document.querySelector('app-descriptions');
-    const ng = (window as any).ng;
-    if (!appEl || !ng?.getComponent) return;
-    const comp = ng.getComponent(appEl);
-    if (!comp?.descriptions) return;
-    Object.keys(comp.descriptions).forEach(k => { comp.descriptions[k] = desc; });
-    comp.submit();
-  }, "Evaluate whether the agent's first message includes their own first name and a greeting phrase (hello, hi, good morning, good afternoon, or welcome).");
-
-  await page.waitForURL(/\/progress\//, { timeout: 30_000 });
-  await expect(page.getByRole('heading', { name: 'Optimization in Progress' })).toBeVisible();
-
-  // ── 9+10. Poll backend directly until complete (SSE can drop in headless) ──
-  const sessionId = page.url().split('/progress/')[1];
-
-  const finalPhase = await page.evaluate(
-    async ({ sid, deadline }: { sid: string; deadline: number }) => {
-      while (Date.now() < deadline) {
+/** Poll GET /api/sessions/:id until the graph reaches a terminal state. */
+async function pollUntilTerminal(page: Page, sessionId: string, limitMs: number): Promise<string> {
+  return page.evaluate(
+    async ({ sid, limit }: { sid: string; limit: number }) => {
+      const end = Date.now() + limit;
+      while (Date.now() < end) {
         try {
-          const r = await fetch(`/api/sessions/${sid}`);
-          const s = await r.json();
-          if (s.current_phase === 'awaiting_clarification' && s.clarifying_questions?.length) {
-            return 'clarification';
-          }
-          if (s.optimization_complete || s.current_phase === 'complete') return 'complete';
-          if (s.current_phase === 'error') return 'error';
-        } catch { /* retry on network glitch */ }
-        await new Promise(res => setTimeout(res, 3000));
+          const s = await fetch(`/api/sessions/${sid}`).then(r => r.json());
+          if (s.current_phase === 'complete' || s.optimization_complete)
+            return 'complete';
+          if (s.current_phase === 'error')
+            return `error: ${s.error_message ?? 'unknown'}`;
+        } catch { /* transient network glitch — retry */ }
+        await new Promise(r => setTimeout(r, 3_000));
       }
       return 'timeout';
     },
-    { sid: sessionId, deadline: Date.now() + 8 * 60 * 1000 }
+    { sid: sessionId, limit: limitMs },
   );
+}
 
-  if (finalPhase === 'clarification') {
-    await page.goto(`/clarification/${sessionId}`);
+// ── test ──────────────────────────────────────────────────────────────────────
 
+test('full optimization flow — upload → describe → [clarify] → progress → results', async ({ page }) => {
+  if (!process.env['OPENAI_API_KEY']) test.skip();
+
+  // ── 1. Upload page ───────────────────────────────────────────────────────
+  await page.goto('/upload');
+  await expect(page.getByRole('heading', { name: 'Upload Evaluation Data' })).toBeVisible();
+
+  // ── 2. Model config — Default (.env) mode (uses server-side API key) ─────
+  await expect(page.getByRole('button', { name: 'Default (.env)' })).toHaveClass(/active/);
+
+  // ── 3. Verify the backend key is valid ───────────────────────────────────
+  await page.getByRole('button', { name: /Test Connection/i }).click();
+  await expect(page.locator('.conn-success')).toContainText('Connected', { timeout: 30_000 });
+
+  // ── 4. Upload fixture CSV ────────────────────────────────────────────────
+  await page.locator('input[type="file"]').setInputFiles(FIXTURE);
+  await expect(page.locator('.drop-file-name')).toContainText('test_conversations.csv');
+
+  // ── 5. Set run config via Angular component API (more reliable than DOM events) ──
+  await page.evaluate(() => {
+    const el = document.querySelector('app-upload');
+    const ng = (window as any).ng;
+    if (!el || !ng?.getComponent) return;
+    const comp = ng.getComponent(el);
+    comp.maxIterations = 1;     // finish fast
+    comp.accuracyTarget = 0.70; // easy target
+    ng.applyChanges(comp);
+  });
+  await expect(page.locator('input[type="range"]')).toHaveValue('1');
+  await expect(page.getByRole('button', { name: '70%' })).toHaveClass(/active/);
+
+  // ── 6. Start — lands on /descriptions/:id ───────────────────────────────
+  await page.locator('.cta-btn').click();
+  await page.waitForURL(/\/descriptions\//, { timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'Configure Evaluation Parameters' })).toBeVisible();
+
+  // ── 7. Wait for parameters to load ──────────────────────────────────────
+  await page.waitForFunction(() => {
+    const el = document.querySelector('app-descriptions');
+    const ng = (window as any).ng;
+    if (!el || !ng?.getComponent) return false;
+    const comp = ng.getComponent(el);
+    return comp?.parameters?.length > 0 && comp.loading === false;
+  }, { timeout: 15_000 });
+
+  // ── 8. Fill answer descriptions and submit ───────────────────────────────
+  await page.evaluate((desc: string) => {
+    const el = document.querySelector('app-descriptions');
+    const ng = (window as any).ng;
+    if (!el || !ng?.getComponent) return;
+    const comp = ng.getComponent(el);
+    Object.keys(comp.metricStates).forEach(key => {
+      comp.metricStates[key].answerDescription = desc;
+      // triggerDescription left empty — all parameters are static in the fixture
+    });
+    ng.applyChanges(comp);
+    comp.submit();
+  }, ANSWER_DESC);
+
+  // Descriptions component waits for ambiguity detection, then routes to
+  // /clarification if questions were found, or /progress if none.
+  await page.waitForURL(/\/(clarification|progress)\//, { timeout: 60_000 });
+  const firstUrl = page.url();
+  const sessionId = firstUrl.match(/\/(clarification|progress)\/([^/?]+)/)?.[2] ?? '';
+
+  // ── 9. Clarification branch — if routed there directly from describe ──────
+  if (firstUrl.includes('/clarification/')) {
+    // Questions are guaranteed present — component does a single fetch
     await page.waitForFunction(() => {
-      const appEl = document.querySelector('app-clarification');
+      const el = document.querySelector('app-clarification');
       const ng = (window as any).ng;
-      if (!appEl || !ng?.getComponent) return false;
-      const comp = ng.getComponent(appEl);
-      return comp?.questions?.length > 0 && Object.keys(comp.answers).length > 0;
-    }, { timeout: 15_000 });
+      if (!el || !ng?.getComponent) return false;
+      const comp = ng.getComponent(el);
+      return comp && comp.loadingQuestions === false && comp.questions?.length > 0;
+    }, { timeout: 30_000 });
 
-    await page.evaluate((answer) => {
-      const appEl = document.querySelector('app-clarification');
+    await expect(page.locator('.question-card').first()).toBeVisible();
+
+    await page.evaluate(() => {
+      const el = document.querySelector('app-clarification');
       const ng = (window as any).ng;
-      if (!appEl || !ng?.getComponent) return;
-      const comp = ng.getComponent(appEl);
-      if (!comp?.answers) return;
-      Object.keys(comp.answers).forEach(k => { comp.answers[k] = answer; });
+      if (!el || !ng?.getComponent) return;
+      const comp = ng.getComponent(el);
+      Object.keys(comp.answers).forEach(k => {
+        comp.answers[k] = 'No additional requirements — evaluate exactly as the description states.';
+      });
+      ng.applyChanges(comp);
       comp.submit();
-    }, 'No additional requirements. Evaluate as the description states.');
+    });
 
-    const afterClarify = await page.evaluate(
-      async ({ sid, deadline }: { sid: string; deadline: number }) => {
-        while (Date.now() < deadline) {
-          try {
-            const r = await fetch(`/api/sessions/${sid}`);
-            const s = await r.json();
-            if (s.optimization_complete || s.current_phase === 'complete') return 'complete';
-            if (s.current_phase === 'error') return 'error';
-          } catch { /* retry */ }
-          await new Promise(res => setTimeout(res, 3000));
-        }
-        return 'timeout';
-      },
-      { sid: sessionId, deadline: Date.now() + 8 * 60 * 1000 }
-    );
-    expect(afterClarify).toBe('complete');
-  } else {
-    expect(finalPhase).toBe('complete');
+    await page.waitForURL(/\/progress\//, { timeout: 30_000 });
   }
 
+  // ── 10. Progress page — visible ──────────────────────────────────────────
+  await expect(page.getByRole('heading', { name: 'Optimization Running' })).toBeVisible();
+
+  // ── 11. Poll until graph reaches complete (max 8 min) ────────────────────
+  const finalPhase = await pollUntilTerminal(page, sessionId, 8 * 60_000);
+  expect(finalPhase, `Run ended with: ${finalPhase}`).toBe('complete');
+
+  // ── 12. Results page ─────────────────────────────────────────────────────
   await page.goto(`/results/${sessionId}`);
 
-  // ── 11. Assert results page content ────────────────────────────────────────
-  await expect(page.getByRole('heading', { name: 'Optimization Results' })).toBeVisible();
+  // Report loads inside *ngIf="report" so the heading appearing means data is ready
+  await expect(page.getByRole('heading', { name: 'Optimization Complete' })).toBeVisible({ timeout: 15_000 });
 
-  const summaryCards = page.locator('.summary-card');
-  await expect(summaryCards).toHaveCount(4);
+  // KPI grid — 4 cards
+  const kpiCards = page.locator('.kpi-card');
+  await expect(kpiCards).toHaveCount(4);
+  await expect(kpiCards.nth(0).locator('.kpi-label')).toContainText('Overall Accuracy');
+  await expect(kpiCards.nth(0).locator('.kpi-val')).toContainText('%');
+  await expect(kpiCards.nth(1).locator('.kpi-label')).toContainText('Met Target');
+  await expect(kpiCards.nth(2).locator('.kpi-label')).toContainText('Iterations');
+  await expect(kpiCards.nth(3).locator('.kpi-label')).toContainText('Conversations');
 
-  const accuracyCard = summaryCards.nth(2);
-  await expect(accuracyCard.locator('.lbl')).toContainText('Overall Accuracy');
-  await expect(accuracyCard.locator('.val')).toContainText('%');
+  // 1 static metric → 1 parameter card
+  const paramCards = page.locator('.param-card');
+  await expect(paramCards).toHaveCount(1);
+  await expect(paramCards.first().locator('.param-id')).toContainText('Greeting Compliance');
+  await expect(paramCards.first().locator('.status-badge')).toBeVisible();
+  await expect(paramCards.first().locator('.acc-journey')).toContainText('%');
 
-  await expect(page.locator('.param-card')).toHaveCount(1);
+  // Expand the parameter card and verify before/after prompts and confusion matrix
+  await paramCards.first().locator('.param-row').click();
+  const compareCols = page.locator('.compare-col');
+  await expect(compareCols).toHaveCount(2);
+  await expect(compareCols.nth(0).locator('.compare-label')).toContainText('Before');
+  await expect(compareCols.nth(1).locator('.compare-label')).toContainText('After');
+  await expect(page.locator('.prompt-pre').first()).not.toBeEmpty();
+  await expect(page.locator('.prompt-pre.after')).not.toBeEmpty();
+
+  await expect(page.locator('.matrix-grid')).toBeVisible();
+  await expect(page.locator('.cell-tp')).toContainText('True Pos');
+  await expect(page.locator('.cell-tn')).toContainText('True Neg');
+
+  // Conversation-level results expandable
+  await page.locator('.convs-toggle').click();
+  const convRows = page.locator('.conv-table tbody tr');
+  await expect(convRows).toHaveCount(10); // 10 conversations in fixture
+
+  // Export CSV button present and functional
+  await expect(page.getByRole('button', { name: /Export CSV/i })).toBeVisible();
 });

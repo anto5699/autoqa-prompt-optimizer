@@ -149,7 +149,7 @@ class OptimizationState(TypedDict):
     # Optimization loop
     current_iteration: int
     max_iterations: int                           # default 5, set at session creation
-    accuracy_target: float                        # default 0.80
+    accuracy_target: float                        # default 0.90
     parameter_records: Dict[str, ParameterOptimizationRecord]
 
     # Control
@@ -285,15 +285,16 @@ Max 2 questions per parameter. Max 10 questions total. If questions exist, call 
 ### `baseline_prompt_generator`
 **Output keys:** `parameter_records`, `current_phase`, `progress_log`
 
-For each parameter, generate an initial evaluation prompt incorporating: parameter description, user clarification answers for that parameter (if any), and contact center domain context.
+For each rule, normalises the description into the required structured format (METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES) using one of three modes:
 
-**Each generated prompt must include:**
-- What the criterion is
-- What constitutes Yes (passing)
-- What constitutes No (failing)
-- When to return NA
-- Evidence grounding: `"Base your evaluation only on what is explicitly stated or clearly implied in the transcript."`
-- Output constraint: `"Respond with exactly one word: Yes, No, or NA. Do not include any explanation."`
+| Condition | Mode | Behaviour |
+|---|---|---|
+| `current_description` is empty | `generate` | Generate a structured description from scratch using rule metadata |
+| Clarification answers exist for the rule | `rewrite` | Rewrite from clarification answers as the authoritative definition (original description is reference only) |
+| Description exists but is not in structured format | `format` | Convert plain-text description to structured format without changing meaning, scope, or criteria |
+| Description already in structured format | *(skip)* | No LLM call — description is used as-is |
+
+The structured format is detected by checking whether the description starts with `METRIC_NAME:`. Descriptions that pass this check are left unchanged.
 
 Initialize `ParameterOptimizationRecord` for each parameter with `status = "pending"`, `current_predictions = {}`, `iteration_history = []`, all metrics = 0.
 
@@ -302,12 +303,14 @@ Initialize `ParameterOptimizationRecord` for each parameter with `status = "pend
 ### `evaluator`
 **Output keys:** Updated `parameter_records` (with `current_predictions` populated), `current_phase`, `progress_log`
 
-For each (parameter, conversation) pair where ground truth ≠ NA:
-- Call Claude with `current_prompt` + transcript
-- Parse response: strip whitespace, title-case → must be `Yes`, `No`, or `NA`
-- On parse failure: treat as `No`, append warning to `progress_log` (parameter name + iteration, no transcript content)
+**Converged rules are skipped entirely** — rules with `status = "converged"` are excluded from the LLM call. This prevents non-determinism from regressing rules that have already hit the accuracy target. Only non-converged rules are included in the rules array sent to each conversation call.
 
-Write results to `parameter_records[param_name]["current_predictions"][conversation_id]`.
+For each conversation (where at least one non-converged rule exists):
+- Send ONE LLM call containing all non-converged rule descriptions as a JSON array
+- Parse the JSON response array: one result object per rule
+- On parse failure: treat as `No`, append warning to `progress_log` (rule_id + iteration, no transcript content)
+
+Write results to `parameter_records[rule_id]["current_predictions"][conversation_id]`.
 
 **Batching:** `asyncio.gather` with semaphore capped at `MAX_CONCURRENT_LLM_CALLS`. Never exceed 20.
 
@@ -388,6 +391,8 @@ Increment `current_iteration`. Reset `current_predictions = {}` for each affecte
 
 Mark below-target parameters as `"max_iterations_reached"`, converged parameters as `"converged"`. Compile `final_report` (see Report Schema).
 
+**Regression warning:** If any parameter's `best_accuracy` (the highest accuracy ever seen) exceeded `accuracy_target` at some point but the final accuracy is below target (i.e., the regression guard reverted to a description that still doesn't meet target), include a regression warning in the report with the parameter name, the peak accuracy reached, the final accuracy, and a suggested next step (e.g., resume from the best description with a more conservative optimizer pass).
+
 ---
 
 ## FastAPI API Contract
@@ -399,7 +404,7 @@ Errors: `{"error": "<message>", "detail": "<optional>"}`
 
 ### `POST /api/sessions`
 **Content-Type:** `multipart/form-data`
-**Fields:** `file` (CSV), `max_iterations` (int, default 5, max 10), `accuracy_target` (float, default 0.80)
+**Fields:** `file` (CSV), `max_iterations` (int, default 5, max 10), `accuracy_target` (float, default 0.90)
 
 **201:**
 ```json
@@ -484,7 +489,7 @@ Stream until `complete` or `error`. Backend must set `Cache-Control: no-cache` a
     "overall_accuracy": 0.83,
     "total_iterations": 3,
     "total_conversations": 42,
-    "accuracy_target": 0.80
+    "accuracy_target": 0.90
   },
   "parameters": {
     "greeting_compliance": {
@@ -526,7 +531,7 @@ All `ParameterOptimizationRecord` fields must be present per parameter. `rca_fin
 
 **Step 1: Upload (`/upload`)**
 - CSV dropzone (click + drag), `.csv` only, client-side type check
-- `max_iterations` (default 5) and `accuracy_target` (default 0.80) inputs
+- `max_iterations` (default 5) and `accuracy_target` (default 0.90) inputs
 - POST → navigate to `/clarification/:id` if `clarifying_questions.length > 0`, else `/progress/:id`
 
 **Step 2: Clarification (`/clarification/:sessionId`)**
@@ -542,9 +547,13 @@ All `ParameterOptimizationRecord` fields must be present per parameter. `rca_fin
 
 **Step 4: Results (`/results/:sessionId`)**
 - Summary cards: total / met target / overall accuracy / iterations
-- Parameters table: name, status badge, accuracy, iterations, details toggle
-- Detail panel: final prompt + copy button, accuracy sparkline (inline SVG), 2×2 confusion matrix, RCA findings, recommendations
-- Status colours: green ≥80%, amber 70–79%, red <70%
+- Parameters table: name, status badge, initial accuracy, final accuracy, improvement, precision, recall
+- Detail panel: start→end accuracy header, precision/recall/confusion matrix, improvement trend chart (SVG), "What changed" box (`optimization_notes`), original vs optimised prompt side-by-side with copy buttons
+- Status colours: green ≥90%, amber 80–89%, red <80%
+- Three export buttons in header:
+  - **Export Evaluations CSV** — wide format, one row per conversation; column groups `{rule_id}_ground_truth`, `{rule_id}_prediction`, `{rule_id}_correct` per rule
+  - **Export Prompts CSV** — columns `parameter_name, rule_type, optimised_prompt`; `rule_type` inferred from `_trigger_` in rule ID
+  - **Export Report PDF** — triggers `window.print()` on a hidden print component; contains overall accuracy before/after, per-parameter summary table, confusion matrix, iteration trend, optimization notes, and original vs final prompts (copy buttons hidden in print via `.no-print`)
 
 ---
 

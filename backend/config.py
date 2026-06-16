@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,18 +44,40 @@ Respond with ONLY a valid JSON array — one object per rule — in this exact f
 Do not include any text outside the JSON array."""
 
 
-@lru_cache(maxsize=1)
-def get_llm():
-    """Return the shared ChatOpenAI instance. Deferred so startup never requires a key."""
+def get_llm(model: str = None, api_key: str = None, base_url: str = None):
+    """Return a ChatOpenAI or AzureChatOpenAI instance. Params fall back to settings when falsy."""
+    import re
+
+    effective_base_url = base_url or None
+
+    if effective_base_url and ".openai.azure.com" in effective_base_url:
+        from langchain_openai import AzureChatOpenAI
+
+        endpoint_match = re.match(r"(https://[^/]+\.openai\.azure\.com)", effective_base_url)
+        azure_endpoint = endpoint_match.group(1) if endpoint_match else effective_base_url
+
+        dep_match = re.search(r"/deployments/([^/?]+)", effective_base_url)
+        azure_deployment = dep_match.group(1) if dep_match else (model or settings.openai_model)
+
+        return AzureChatOpenAI(
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version="2024-02-01",
+            max_completion_tokens=15000,
+            timeout=180,
+            api_key=api_key or settings.openai_api_key or None,
+        )
+
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
-        model=settings.openai_model,
+        model=model or settings.openai_model,
         temperature=0,
         top_p=1,
         frequency_penalty=0,
         presence_penalty=0,
         max_completion_tokens=15000,
         timeout=180,
-        api_key=settings.openai_api_key or None,
+        api_key=api_key or settings.openai_api_key or None,
+        base_url=effective_base_url,
     )

@@ -14,7 +14,7 @@ Upload CSV  →  Enter Descriptions  →  Answer Clarifications  →  Watch Opti
 2. **Describe** what each evaluation parameter means in plain language
 3. **Answer** any clarifying questions the system asks about ambiguous rules
 4. **Watch** the agent iterate: evaluate → analyse failures → rewrite descriptions → repeat
-5. **Export** the optimized descriptions and per-rule accuracy metrics as JSON
+5. **Export** results in three formats: evaluations CSV (wide format), optimised prompts CSV, or a full PDF report
 
 The system stops when every rule meets the accuracy target or the iteration cap is reached — whichever comes first.
 
@@ -67,6 +67,7 @@ Create `backend/.env` (see `backend/.env.example`):
 | `MAX_CONCURRENT_LLM_CALLS` | `5` | Semaphore cap on parallel evaluator calls |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `CORS_ORIGINS` | `http://localhost:4200` | Allowed origins for the FastAPI backend |
+| `ACCURACY_TARGET` | `0.90` | Default accuracy target used if not specified at upload |
 
 ---
 
@@ -182,14 +183,15 @@ python generate_demo_csv.py
 | Node | Purpose |
 |---|---|
 | `ingestion` | Parses the uploaded CSV into per-rule `parameter_records`; validates state |
-| `baseline_generator` | Rewrites each description into a structured format (METRIC_NAME / SPEAKER / ACTION / PASS_CRITERIA / EXAMPLES) before the first evaluation |
+| `baseline_generator` | Normalises all rule descriptions into the required structured format (METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES) before the first evaluation. Generates from scratch when no description is provided, rewrites from clarification answers when answers exist, and reformats plain-text descriptions that are already written but not in the structured format — without changing their meaning. |
 | `ambiguity_detection` | LLM-classifies each description for ambiguity; generates up to 2 targeted clarification questions per ambiguous rule; pauses the graph via `interrupt()` |
 | `evaluator` | Sends **one LLM call per conversation** containing all rule descriptions; parses the JSON response into per-rule predictions |
 | `benchmarking` | Computes accuracy / precision / recall / F1 per rule; regression guard reverts a description if it performs worse than the prior best |
 | `router` | Routes to `finalize_report` when all rules converge or the iteration cap is hit; otherwise continues to `rca_analyzer` |
 | `rca_analyzer` | Collects FP/FN examples with full transcripts; asks the LLM to identify the root cause of failures in the current description |
 | `prompt_optimizer` | Reads RCA findings, accuracy trajectory, and clarification answers; rewrites the description to address identified weaknesses; detects stagnation (4+ identical accuracy values) and forces a different rewrite strategy |
-| `finalize_report` | Assembles the structured result with per-rule metrics, optimized descriptions, and regression warnings |
+| `evaluator` | Sends **one LLM call per conversation** containing all active (non-converged) rule descriptions; converged rules are skipped to prevent LLM non-determinism from regressing rules that already hit target |
+| `finalize_report` | Assembles the structured result with per-rule metrics, optimized descriptions, regression warnings, and root cause analysis for rules that didn't converge |
 
 ### Optimization Loop
 

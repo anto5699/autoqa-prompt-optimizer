@@ -37,7 +37,11 @@ Format rules:
 - PASS_CRITERIA: 2-5 numbered conditions; each must be observable from transcript text alone
 - EXAMPLES: minimum 2 PASS and 2 FAIL utterances that would appear verbatim in a transcript
 - Never use vague terms: "appropriately", "effectively", "sufficiently", "properly", "well"
-- Never require knowledge outside the transcript to evaluate a criterion\
+- Never require knowledge outside the transcript to evaluate a criterion
+- Transcript is text-only: never infer tone, intonation, warmth, voice quality, or prosodic cues — every criterion must be derivable from the written words alone
+- Adherence must be established from explicit verbal content in the transcript only — never from non-transcript actions (e.g., post-call system updates, CRM entries), implicit signals (e.g., agent hanging up), or behaviours that are not spoken in the conversation
+- Evaluation is binary: the agent either adhered or did not. Never introduce partial adherence, scoring, thresholds, or weighted criteria
+- Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description\
 """
 
 
@@ -45,18 +49,27 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
     logger.info("session=%s phase=generating_baselines", state["session_id"])
     session_store.update(state["session_id"], {"current_phase": "generating_baselines"})
 
+    llm_config = state.get("llm_config", {})
+    llm = get_llm(
+        model=llm_config.get("model"),
+        api_key=llm_config.get("api_key"),
+        base_url=llm_config.get("base_url"),
+    )
+
     records = dict(state["parameter_records"])
     user_answers = state.get("user_answers", {})
+    qid_to_param = {q["question_id"]: q["parameter_name"] for q in state.get("clarifying_questions", [])}
     log_messages = []
 
     for rule_id, record in records.items():
         has_description = bool(record["current_description"].strip())
-        has_clarifications = bool(user_answers)
+        rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
+        has_clarifications = bool(rule_answers)
 
         if not has_description:
             # No description from CSV — generate from scratch
-            task = _build_generation_task(record, user_answers, mode="generate")
-            response = await get_llm().ainvoke([
+            task = _build_generation_task(record, rule_answers, mode="generate")
+            response = await llm.ainvoke([
                 SystemMessage(content=_SYSTEM),
                 HumanMessage(content=task),
             ])
@@ -68,8 +81,8 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
         elif has_clarifications:
             # Clarifications exist — rewrite from scratch anchored to user answers.
             # Prevents semantic drift when clarifications redefine the criterion entirely.
-            task = _build_generation_task(record, user_answers, mode="rewrite")
-            response = await get_llm().ainvoke([
+            task = _build_generation_task(record, rule_answers, mode="rewrite")
+            response = await llm.ainvoke([
                 SystemMessage(content=_SYSTEM),
                 HumanMessage(content=task),
             ])
@@ -78,11 +91,28 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
             log_messages.append(f"Rewrote description for {rule_id} using clarification answers")
             logger.info("session=%s rewrote description from clarifications for rule_id=%s", state["session_id"], rule_id)
 
+        elif not _is_structured(record["current_description"]):
+            # Has a plain-text description but not in the required structured format.
+            # Convert to structured format without altering the meaning or criteria.
+            task = _build_generation_task(record, {}, mode="format")
+            response = await llm.ainvoke([
+                SystemMessage(content=_SYSTEM),
+                HumanMessage(content=task),
+            ])
+            new_description = response.content.strip()
+            records[rule_id] = {**record, "current_description": new_description}
+            log_messages.append(f"Converted {rule_id} description to structured format")
+            logger.info("session=%s converted description to structured format for rule_id=%s", state["session_id"], rule_id)
+
     return {
         "parameter_records": records,
         "current_phase": "evaluating",
         "progress_log": log_messages or ["Baselines ready: using production descriptions from CSV"],
     }
+
+
+def _is_structured(description: str) -> bool:
+    return description.strip().startswith("METRIC_NAME:")
 
 
 def _build_generation_task(record: dict, user_answers: dict, *, mode: str) -> str:
@@ -112,6 +142,13 @@ def _build_generation_task(record: dict, user_answers: dict, *, mode: str) -> st
             f"If the clarifications define a different criterion than the original description, "
             f"write the new description around the clarifications — not the original description.\n\n"
             f"Original description (for reference only):\n{record['current_description']}\n\n"
+        )
+    elif mode == "format":
+        preamble = (
+            f"The following plain-text description defines the evaluation criterion for this rule.\n"
+            f"Convert it to the required structured format without changing the meaning, scope, or criteria.\n"
+            f"Do not add, remove, or alter any conditions — only reformat.\n\n"
+            f"Original description:\n{record['current_description']}\n\n"
         )
     else:
         preamble = ""

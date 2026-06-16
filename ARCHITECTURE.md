@@ -4,7 +4,7 @@
 
 ## System Overview
 
-The AutoQA Prompt Optimizer is a **LangGraph agentic pipeline** wrapped in a FastAPI backend with an Angular frontend. It takes CSV-formatted conversation data and iteratively refines LLM evaluation rule descriptions until each rule achieves a configurable accuracy target against ground truth labels.
+The AutoQA Prompt Optimizer is a **LangGraph agentic pipeline** wrapped in a FastAPI backend with an Angular frontend. It takes CSV-formatted conversation data and iteratively refines LLM evaluation rule descriptions until each rule achieves a configurable accuracy target against ground truth labels. 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -26,14 +26,16 @@ The AutoQA Prompt Optimizer is a **LangGraph agentic pipeline** wrapped in a Fas
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     LangGraph Agent Graph                            │
 │                                                                      │
-│  ingestion → baseline_generator → ambiguity_detection               │
-│       ↓ (interrupt on questions)                                     │
+│  csv_ingestion → ambiguity_detection → baseline_prompt_generator    │
+│       ↓ (interrupt if questions)                                     │
 │  [user answers via API resume]                                       │
 │       ↓                                                              │
 │  evaluator → benchmarking → router                                   │
 │       ↓ (below target)              ↓ (all converged or max_iter)    │
-│  rca_analyzer → prompt_optimizer   finalize_report                   │
-│       └────────── loop back to evaluator ──────────────┘            │
+│  rca_analyzer → mid_loop_clarification → prompt_optimizer  finalize  │
+│       ↓ (interrupt if stagnant+ambiguous)                            │
+│  [user answers via API resume]                                       │
+│       └──────────────── loop back to evaluator ────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -49,27 +51,31 @@ The AutoQA Prompt Optimizer is a **LangGraph agentic pipeline** wrapped in a Fas
 
 | Node | Phase label | Purpose |
 |---|---|---|
-| `ingestion` | `ingesting` | Initialises `parameter_records` from parsed rules; validates state |
-| `baseline_generator` | `generating_baseline` | Rewrites each rule description into the structured format (METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES) before the first evaluation |
-| `ambiguity_detection` | `awaiting_clarification` | Sends each description to an LLM classifier; generates ≤2 targeted questions per ambiguous rule; calls `interrupt()` to pause the graph |
-| `evaluator` | `evaluating` | Sends ONE LLM call per conversation containing ALL rule descriptions; parses the JSON response array into per-rule predictions |
+| `csv_ingestion` | `ingesting` | Initialises `parameter_records` from parsed rules; validates state |
+| `ambiguity_detection` | `awaiting_clarification` | Sends each description to an LLM classifier; generates ≤2 targeted questions per ambiguous rule; calls `interrupt()` to pause the graph for initial pre-loop clarification |
+| `baseline_prompt_generator` | `generating_baselines` | Normalises every rule description to structured format before the first evaluation. Three modes: **generate** (no description), **rewrite** (clarification answers exist), **format** (plain text → structured without changing criteria). Already-structured descriptions are left unchanged. |
+| `evaluator` | `evaluating` | Sends ONE LLM call per conversation containing all **non-converged** rule descriptions; converged rules are excluded to prevent LLM non-determinism from regressing rules already at target. Parses the JSON response array into per-rule predictions. |
 | `benchmarking` | `benchmarking` | Computes accuracy / precision / recall / F1 per rule; applies regression guard (reverts description if worse than best); marks rules `converged` or `optimizing` |
-| `router` | — | Conditional edge: routes to `finalize_report` if all rules converged or `max_iterations` reached; otherwise routes to `rca_analyzer` |
+| `router` (conditional edge) | — | Routes to `finalize` if all rules converged or `max_iterations` reached; otherwise routes to `rca_analyzer` |
 | `rca_analyzer` | `analyzing_failures` | Collects FP/FN cases with full transcripts; calls LLM to identify root cause in the description; stores findings in `parameter_records` |
-| `prompt_optimizer` | `optimizing_prompts` | Reads RCA findings + accuracy trajectory + clarification answers; detects stagnation (4+ identical accuracy history entries); calls LLM to rewrite description; increments iteration counter |
-| `finalize_report` | `complete` | Assembles the structured final report with per-rule metrics, status, trajectory, and any regression warnings |
+| `mid_loop_clarification` | `awaiting_clarification` | After RCA, checks each stagnant below-target rule for description ambiguity a domain expert could resolve. Calls `interrupt()` only when: (1) the rule is stagnant (≥3 consecutive identical accuracy values), (2) RCA indicates genuine description ambiguity, and (3) the rule has not been mid-loop clarified before. Pass-through (`return {}`) otherwise — no interrupt, no delay. |
+| `prompt_optimizer` | `optimizing_prompts` | Reads RCA findings + accuracy trajectory + all clarification answers (initial + mid-loop); detects stagnation (4+ identical accuracy history entries); calls LLM to rewrite description; increments iteration counter |
+| `finalize` | `complete` | Assembles the structured final report with per-rule metrics, status, trajectory, optimization notes, and regression warnings (flagged when a rule's best-ever accuracy exceeded target but final accuracy did not) |
 
 ### Graph Topology
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ingestion
-    ingestion --> baseline_generator
-    baseline_generator --> ambiguity_detection
+    [*] --> route_entry
+    route_entry --> csv_ingestion : normal start
+    route_entry --> evaluator : skip_setup=true (session resume shortcut)
 
-    ambiguity_detection --> evaluator : no questions (clarification_complete=true)
-    ambiguity_detection --> INTERRUPT : questions generated
-    INTERRUPT --> evaluator : user answers submitted (Command resume)
+    csv_ingestion --> ambiguity_detection
+    ambiguity_detection --> baseline_prompt_generator : no questions
+    ambiguity_detection --> INTERRUPT_INITIAL : questions generated
+    INTERRUPT_INITIAL --> baseline_prompt_generator : user answers submitted
+
+    baseline_prompt_generator --> evaluator
 
     evaluator --> benchmarking
     benchmarking --> router
@@ -77,7 +83,11 @@ stateDiagram-v2
     router --> rca_analyzer : rules below target AND iterations remaining
     router --> finalize_report : all converged OR max_iterations reached
 
-    rca_analyzer --> prompt_optimizer
+    rca_analyzer --> mid_loop_clarification
+    mid_loop_clarification --> prompt_optimizer : no ambiguity detected (pass-through)
+    mid_loop_clarification --> INTERRUPT_MIDLOOP : stagnant rule with resolvable ambiguity
+    INTERRUPT_MIDLOOP --> prompt_optimizer : user answers submitted
+
     prompt_optimizer --> evaluator
 
     finalize_report --> [*]
@@ -263,10 +273,18 @@ Frontend                  FastAPI                  LangGraph Graph
    │◀── {status: resumed} ───│                          │── benchmarking
    │                         │                          │── router
    │── GET /sessions/{id} ──▶│                          │── rca_analyzer
-   │   (polling) ────────────│                          │── prompt_optimizer
-   │◀── phase=evaluating ────│                          │── evaluator (loop)
+   │   (polling) ────────────│                          │── mid_loop_clarification
+   │◀── phase=evaluating ────│                          │   (may interrupt if stagnant+ambiguous)
+   │                         │                          │
+   │  [if mid-loop interrupt]│                          │
+   │── GET /sessions/{id} ──▶│                          │
+   │◀── questions[] ─────────│◀── phase=awaiting_clarif─┤
+   │── POST /sessions/{id}   │                          │
+   │   /answers ────────────▶│── graph.ainvoke(         │
+   │                         │   Command(resume=...)) ──▶│── prompt_optimizer
+   │◀── {status: resumed} ───│                          │── evaluator (loop)
    │                         │                          │       …
-   │── GET /sessions/{id}    │                          │── finalize_report
+   │── GET /sessions/{id}    │                          │── finalize
    │   /report ─────────────▶│                          │
    │◀── FinalReport ─────────│◀── optimization_complete─┤
    │                         │                          │
@@ -288,11 +306,12 @@ Frontend                  FastAPI                  LangGraph Graph
 
 | Stage | LLM calls | Notes |
 |---|---|---|
-| Baseline generator | 1 per rule | Rewrites initial descriptions into structured format |
-| Ambiguity detection | 1 per rule | Classifies ambiguity, generates questions |
-| Evaluator | 1 per conversation per iteration | All rules in one call per conversation |
+| Baseline generator | 0–1 per rule | Skipped if description already in structured format; otherwise 1 call (generate / rewrite / format) |
+| Ambiguity detection | 1 per rule | Classifies ambiguity, generates questions; may interrupt for user answers |
+| Evaluator | 1 per conversation per iteration | Non-converged rules only, all in one call per conversation |
 | RCA analyzer | 1 per below-target rule per iteration | Reads FP/FN cases with transcripts |
-| Prompt optimizer | 1 per below-target rule per iteration | Rewrites description |
+| Mid-loop clarification | 0–1 per stagnant rule | Only when rule is stagnant ≥3 iterations AND RCA flags genuine ambiguity; pass-through otherwise |
+| Prompt optimizer | 1 per below-target rule per iteration | Rewrites description using RCA + all clarification answers |
 
 For a typical session (15 conversations, 4 rules, 5 iterations, 2 rules converge at iteration 1):
 
@@ -321,3 +340,6 @@ Total: ~97 calls (worst case ~150 calls for 5 full iterations, 4 rules)
 | In-memory session store | Sufficient for the POC; avoids database dependency; sessions are short-lived (minutes to hours) |
 | Stagnation detection (4 identical entries) | Prevents the optimizer from making micro-edits that never break out of a local minimum |
 | Transcript-aware RCA | LLM can read the actual failed conversations rather than working from statistics alone — mirrors how a human QA analyst would diagnose misclassifications |
+| Baseline format normalization | Rules with user-provided descriptions that converge immediately (never hitting the optimizer) would remain in plain-text format without this pass — the `format` mode ensures every exported prompt is in the same structured format regardless of iteration path |
+| Wide-format evaluation CSV | One row per conversation (column groups per rule) is more ergonomic for analysis than long format — avoids repeated conversation_id values and makes per-conversation cross-rule comparisons directly readable |
+| Client-side export (CSV + PDF) | All export logic runs in the Angular frontend from the already-loaded report JSON — no additional API endpoints or server-side rendering required |

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConfusionMatrix(BaseModel):
@@ -19,8 +19,18 @@ class IterationEntry(BaseModel):
     f1: Optional[float] = None
 
 
+class ConversationResult(BaseModel):
+    conversation_id: str
+    ground_truth: str
+    prediction: str
+    correct: Optional[bool] = None
+
+
 class ParameterReport(BaseModel):
     status: str
+    original_description: Optional[str] = None
+    initial_prompt: Optional[str] = None
+    initial_accuracy: Optional[float] = None
     final_accuracy: float
     final_precision: float
     final_recall: float
@@ -31,7 +41,9 @@ class ParameterReport(BaseModel):
     optimization_notes: Optional[str] = None
     iteration_history: List[Dict[str, Any]]
     rca_findings: Optional[str] = None
+    regression_warning: Optional[Dict[str, Any]] = None
     recommendations: List[str]
+    conversation_results: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ReportSummary(BaseModel):
@@ -44,6 +56,7 @@ class ReportSummary(BaseModel):
     total_iterations: int
     total_conversations: int
     accuracy_target: float
+    models_used: dict = {}
 
 
 class FinalReport(BaseModel):

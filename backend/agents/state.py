@@ -30,6 +30,7 @@ class RuleRecord(TypedDict):
     initial_accuracy: Optional[float]
     best_accuracy: Optional[float]
     best_description: Optional[str]
+    original_description: Optional[str]
 
 
 ParameterOptimizationRecord = RuleRecord

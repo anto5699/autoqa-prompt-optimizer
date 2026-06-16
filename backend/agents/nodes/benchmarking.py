@@ -46,13 +46,9 @@ async def benchmarking(state: OptimizationState) -> dict:
     log_lines: list[str] = []
 
     for rule_id, record in records.items():
-        # Converged rules are locked — never re-evaluated or re-routed
+        # Converged rules are locked — skip silently; accuracy panel shows their status
         if record.get("status") == "converged":
             meeting_target.append(rule_id)
-            log_lines.append(
-                f"Iteration {current_iteration} | {rule_id}: "
-                f"converged (locked) accuracy={record['current_accuracy']:.2%}"
-            )
             continue
 
         predictions = _apply_trigger_gating(rule_id, record["current_predictions"], records)

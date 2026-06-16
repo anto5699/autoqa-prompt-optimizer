@@ -63,17 +63,56 @@
 /* Detail panel */
 .detail { border-top: 1px solid #e5e7eb; padding: 24px 28px; }
 
-.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-.compare-col { display: flex; flex-direction: column; gap: 8px; }
-.compare-header { display: flex; align-items: center; gap: 8px; }
-.compare-label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; }
-.prompt-pre {
-  flex: 1; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
-  padding: 12px 14px; font-size: 0.78rem; font-family: var(--mono);
-  white-space: pre-wrap; word-break: break-word; line-height: 1.6; color: #374151;
-  max-height: 200px; overflow-y: auto; margin: 0;
+.prompt-three-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 20px;
 }
-.prompt-pre.after { background: #f0fdf4; border-color: #d1fae5; }
+
+@media (max-width: 900px) {
+  .prompt-three-grid { grid-template-columns: 1fr; }
+}
+
+.prompt-col-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.prompt-col-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.prompt-box {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.prompt-box.original { border-color: #d1d5db; background: #f3f4f6; }
+.prompt-box.baseline { border-color: #bfdbfe; background: #eff6ff; }
+.prompt-box.final    { border-color: #a7f3d0; background: #f0fdf4; }
+
+.prompt-acc-badge { padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+.prompt-acc-badge.neutral { background: #f3f4f6; color: #6b7280; }
+.prompt-acc-badge.good { background: #d1fae5; color: #065f46; }
+.prompt-acc-badge.bad  { background: #fee2e2; color: #991b1b; }
 .copy-btn {
   padding: 5px 12px; background: #fff; border: 1px solid #e5e7eb;
   border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 500; color: #374151;
@@ -155,6 +194,13 @@
 .continue-btn:hover:not(:disabled) { background: #b45309; }
 .continue-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.header-btns { display: flex; gap: 8px; align-items: center; }
+.header-btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .pdf-btn { background: #4f46e5; color: #fff; border: 1px solid #4338ca; }
 .pdf-btn:hover { background: #4338ca; }
+
+/* Models used row */
+.models-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.models-label { font-size: 0.75rem; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; }
+.model-chip { font-size: 0.78rem; font-weight: 500; padding: 3px 10px; border-radius: 20px; }
+.eval-chip { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.opt-chip  { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }

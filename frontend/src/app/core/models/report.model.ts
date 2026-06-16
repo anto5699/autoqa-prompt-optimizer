@@ -20,6 +20,7 @@ export interface ConversationResult {
 
 export interface ParameterReport {
   status: string;
+  original_description?: string;
   final_accuracy: number;
   final_precision: number;
   final_recall: number;
@@ -47,6 +48,7 @@ export interface ReportSummary {
   total_iterations: number;
   total_conversations: number;
   accuracy_target: number;
+  models_used?: { evaluator?: string; optimizer?: string };
 }
 
 export interface FinalReport {

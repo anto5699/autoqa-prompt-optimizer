@@ -40,6 +40,12 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           <tr><td>Session</td><td><code>{{ report.session_id }}</code></td></tr>
           <tr><td>Generated</td><td>{{ report.generated_at | date:'medium' }}</td></tr>
           <tr><td>Accuracy target</td><td>{{ pct(report.summary.accuracy_target) }}</td></tr>
+          <tr *ngIf="report.summary.models_used?.evaluator">
+            <td>Evaluation model</td><td>{{ report.summary.models_used?.evaluator }}</td>
+          </tr>
+          <tr *ngIf="report.summary.models_used?.optimizer">
+            <td>Reasoning model</td><td>{{ report.summary.models_used?.optimizer }}</td>
+          </tr>
         </table>
       </div>
 
@@ -198,26 +204,28 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
         </div>
 
         <!-- Prompt comparison -->
-        <div class="pm-title prompt-section-title">Prompt Comparison</div>
-        <div class="print-prompt-grid">
+        <div class="pm-title prompt-section-title">Prompt Progression</div>
+        <div class="prompt-three-grid">
           <div class="prompt-col">
-            <div class="prompt-col-lbl">
-              Initial prompt
-              <span class="prompt-acc-badge" [style.color]="accColor(e.val.initial_accuracy ?? 0, report.summary.accuracy_target)">
-                {{ e.val.initial_accuracy != null ? pct(e.val.initial_accuracy) : '—' }}
-              </span>
-            </div>
-            <pre class="print-prompt-pre">{{ e.val.initial_prompt }}</pre>
+            <div class="prompt-col-header">Original User Description</div>
+            <pre class="prompt-box original">{{ e.val.original_description || '(none — AI generated baseline)' }}</pre>
           </div>
           <div class="prompt-col">
-            <div class="prompt-col-lbl after-lbl">
-              Optimised prompt
-              <span class="prompt-acc-badge" [style.color]="accColor(e.val.final_accuracy, report.summary.accuracy_target)">{{ pct(e.val.final_accuracy) }}</span>
+            <div class="prompt-col-header">
+              Baseline Prompt
+              <span *ngIf="e.val.initial_accuracy != null" class="acc-badge neutral">{{ pct(e.val.initial_accuracy!) }}</span>
+            </div>
+            <pre class="prompt-box baseline">{{ e.val.initial_prompt }}</pre>
+          </div>
+          <div class="prompt-col">
+            <div class="prompt-col-header">
+              Final Optimised Prompt
+              <span class="acc-badge" [class.good]="e.val.final_accuracy >= report!.summary.accuracy_target" [class.bad]="e.val.final_accuracy < report!.summary.accuracy_target">{{ pct(e.val.final_accuracy) }}</span>
               <button class="prompt-copy-btn no-print" (click)="copyPrompt(e.key, e.val.final_prompt)">
                 {{ copiedPdf[e.key] ? '✓ Copied' : 'Copy' }}
               </button>
             </div>
-            <pre class="print-prompt-pre after">{{ e.val.final_prompt }}</pre>
+            <pre class="prompt-box final">{{ e.val.final_prompt }}</pre>
           </div>
         </div>
 
@@ -342,13 +350,17 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
 
     /* Prompt comparison */
     .prompt-section-title { margin-top: 12px; margin-bottom: 10px; }
-    .print-prompt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 1rem; }
+    .prompt-three-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .prompt-col { display: flex; flex-direction: column; }
-    .prompt-col-lbl { font-size: 0.75rem; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
-    .after-lbl { color: #15803d; }
-    .prompt-acc-badge { font-size: 0.8rem; font-weight: 700; font-family: monospace; }
-    .print-prompt-pre { margin: 0; padding: 12px 14px; font-size: 0.82rem; line-height: 1.6; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; white-space: pre-wrap; word-break: break-word; font-family: monospace; flex: 1; }
-    .print-prompt-pre.after { background: #f0fdf4; border: 2px solid #86efac; }
+    .prompt-col-header { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #6b7280; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .prompt-box { font-family: 'Courier New', monospace; font-size: 8px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; padding: 8px; border-radius: 4px; margin: 0; }
+    .prompt-box.original { background: #f3f4f6; border: 1px solid #d1d5db; }
+    .prompt-box.baseline { background: #eff6ff; border: 1px solid #bfdbfe; }
+    .prompt-box.final    { background: #f0fdf4; border: 1px solid #a7f3d0; }
+    .acc-badge { padding: 1px 5px; border-radius: 3px; font-size: 8px; font-weight: 600; }
+    .acc-badge.neutral { background: #f3f4f6; color: #6b7280; }
+    .acc-badge.good { background: #d1fae5; color: #065f46; }
+    .acc-badge.bad  { background: #fee2e2; color: #991b1b; }
     .prompt-copy-btn { font-size: 0.72rem; padding: 3px 10px; border: 1px solid #16a34a; border-radius: 6px; background: #fff; color: #16a34a; cursor: pointer; font-weight: 600; flex-shrink: 0; }
     .prompt-copy-btn:hover { background: #f0fdf4; }
 

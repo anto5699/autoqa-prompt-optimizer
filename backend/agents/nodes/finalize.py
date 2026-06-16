@@ -65,6 +65,7 @@ async def finalize(state: OptimizationState) -> dict:
 
         parameters_report[rule_id] = {
             "status": record["status"],
+            "original_description": record.get("original_description") or "",
             "initial_prompt": initial_desc,
             "initial_accuracy": initial_acc,
             "final_accuracy": final_acc,
@@ -90,6 +91,8 @@ async def finalize(state: OptimizationState) -> dict:
             "conversation_results": conversation_results,
         }
 
+    models_used = (session_store.get(state["session_id"]) or {}).get("models_used", {})
+
     final_report = {
         "session_id": state["session_id"],
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -103,6 +106,7 @@ async def finalize(state: OptimizationState) -> dict:
             "total_iterations": state["current_iteration"],
             "total_conversations": len(state["conversations"]),
             "accuracy_target": state["accuracy_target"],
+            "models_used": models_used,
         },
         "parameters": parameters_report,
     }

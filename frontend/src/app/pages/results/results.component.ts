@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { SessionService } from '../../core/services/session.service';
 import { FinalReport, ParameterReport } from '../../core/models/report.model';
@@ -29,7 +30,17 @@ type FilterKey = 'all' | 'converged' | 'not-met';
           <button class="export-btn pdf-btn" (click)="exportPdf()">
             ↗ Export Report PDF
           </button>
+          <button class="export-btn" (click)="downloadTrace()">
+            ↓ Debug Trace (JSON)
+          </button>
         </div>
+      </div>
+
+      <!-- Models used -->
+      <div *ngIf="report.summary.models_used?.evaluator" class="models-row">
+        <span class="models-label">Models:</span>
+        <span class="model-chip eval-chip">Evaluation: {{ report.summary.models_used?.evaluator }}</span>
+        <span class="model-chip opt-chip">Reasoning: {{ report.summary.models_used?.optimizer }}</span>
       </div>
 
       <!-- KPI cards -->
@@ -97,28 +108,29 @@ type FilterKey = 'all' | 'converged' | 'not-met';
 
         <!-- Detail panel -->
         <div *ngIf="expanded[entry.key]" class="detail">
-          <!-- Before / After prompts -->
-          <div class="compare-grid">
-            <div class="compare-col">
-              <div class="compare-header">
-                <span class="compare-label">Before</span>
-                <span class="acc-val" style="font-size:0.85rem" [style.color]="accColor(entry.val.initial_accuracy ?? 0, report.summary.accuracy_target)">
-                  {{ entry.val.initial_accuracy != null ? pct(entry.val.initial_accuracy) : '—' }}
-                </span>
+          <!-- Original / Baseline / Optimised prompts -->
+          <div class="prompt-three-grid">
+            <div class="prompt-col">
+              <div class="prompt-col-header">
+                <span class="prompt-col-label">Original User Description</span>
+                <span class="prompt-acc-badge neutral">From CSV</span>
               </div>
-              <pre class="prompt-pre">{{ entry.val.initial_prompt }}</pre>
+              <pre class="prompt-box original">{{ entry.val.original_description || '(none — AI generated baseline from scratch)' }}</pre>
             </div>
-            <div class="compare-col">
-              <div class="compare-header">
-                <span class="compare-label">After</span>
-                <span class="acc-val" style="font-size:0.85rem" [style.color]="accColor(entry.val.final_accuracy, report.summary.accuracy_target)">
-                  {{ pct(entry.val.final_accuracy) }}
-                </span>
-                <button class="copy-btn" [class.copied]="copied[entry.key]" (click)="copy(entry.key, entry.val.final_prompt)">
-                  {{ copied[entry.key] ? '✓ Copied' : 'Copy prompt' }}
-                </button>
+            <div class="prompt-col">
+              <div class="prompt-col-header">
+                <span class="prompt-col-label">Baseline Prompt</span>
+                <span *ngIf="entry.val.initial_accuracy !== null && entry.val.initial_accuracy !== undefined" class="prompt-acc-badge neutral">{{ (entry.val.initial_accuracy! * 100).toFixed(1) }}% accuracy</span>
               </div>
-              <pre class="prompt-pre after">{{ entry.val.final_prompt }}</pre>
+              <pre class="prompt-box baseline">{{ entry.val.initial_prompt }}</pre>
+            </div>
+            <div class="prompt-col">
+              <div class="prompt-col-header">
+                <span class="prompt-col-label">Final Optimised Prompt</span>
+                <span class="prompt-acc-badge" [class.good]="entry.val.final_accuracy >= report!.summary.accuracy_target" [class.bad]="entry.val.final_accuracy < report!.summary.accuracy_target">{{ (entry.val.final_accuracy * 100).toFixed(1) }}% accuracy</span>
+                <button class="copy-btn" (click)="copy(entry.key, entry.val.final_prompt)">Copy</button>
+              </div>
+              <pre class="prompt-box final">{{ entry.val.final_prompt }}</pre>
             </div>
           </div>
 
@@ -254,7 +266,7 @@ export class ResultsComponent implements OnInit {
     { key: 'not-met' as FilterKey,   label: 'Not met'         },
   ];
 
-  constructor(private route: ActivatedRoute, private svc: SessionService, private router: Router) {}
+  constructor(private route: ActivatedRoute, private svc: SessionService, private router: Router, private http: HttpClient) {}
 
   ngOnInit() {
     this.sessionId = this.route.snapshot.params['sessionId'];
@@ -447,5 +459,15 @@ export class ResultsComponent implements OnInit {
 
   exportPdf() {
     window.open(`/results/${this.sessionId}/print`, '_blank');
+  }
+
+  downloadTrace() {
+    this.http.get(`/api/sessions/${this.sessionId}/trace`).subscribe(data => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `autoqa-trace-${this.sessionId}.json`; a.click();
+      URL.revokeObjectURL(url);
+    });
   }
 }

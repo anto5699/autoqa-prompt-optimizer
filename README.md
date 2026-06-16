@@ -1,6 +1,7 @@
 # AutoQA Prompt Optimizer
 
 An agentic system that autonomously optimizes LLM evaluation prompts for contact center quality assurance. Upload a CSV of conversations with ground truth labels — the system iteratively refines your evaluation rule descriptions until they hit a configurable accuracy target.
+<img width="1195" height="1021" alt="image" src="https://github.com/user-attachments/assets/b110ddad-d425-44d4-945d-501dc4d99966" />
 
 ---
 

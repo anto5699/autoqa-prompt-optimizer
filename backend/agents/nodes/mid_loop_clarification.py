@@ -31,7 +31,15 @@ _SYSTEM = (
     "and evaluation must be derivable from the written words alone.\n"
     "Never ask whether non-transcript actions (e.g., post-call system updates, CRM entries, agent hanging up) "
     "or implicit signals can satisfy a criterion — adherence must be established from explicit verbal content "
-    "in the transcript only."
+    "in the transcript only.\n"
+    "AUDIENCE RULE: Write every question in plain, everyday language that a non-technical call centre "
+    "QA manager or supervisor can understand and answer without any knowledge of the evaluation system. "
+    "Never reference internal system concepts such as 'PASS criterion', 'PASS_CRITERIA', 'description', "
+    "'evaluation criteria', 'the rule', or 'this criterion'. Never use ML or QA-system jargon. "
+    "Ask about real-world observable behaviour only — frame as scope or boundary questions, for example: "
+    "'When an agent says X, does that count as Y?', 'Is Z enough to satisfy this?', "
+    "'If the agent only does A but not B, should that pass or fail?'. "
+    "Keep questions to 1–2 sentences."
 )
 
 
@@ -69,9 +77,10 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
 
     llm_config = state.get("llm_config", {})
     llm = get_llm(
-        model=llm_config.get("model"),
-        api_key=llm_config.get("api_key"),
-        base_url=llm_config.get("base_url"),
+        model=llm_config.get("optimizer_model") or llm_config.get("model"),
+        api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+        base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+        purpose="optimizer",
     )
 
     questions: list[ClarifyingQuestion] = []

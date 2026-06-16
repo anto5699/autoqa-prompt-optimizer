@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -25,10 +26,16 @@ async def rca_analyzer(state: OptimizationState) -> dict:
 
     llm_config = state.get("llm_config", {})
     llm = get_llm(
-        model=llm_config.get("model"),
-        api_key=llm_config.get("api_key"),
-        base_url=llm_config.get("base_url"),
+        model=llm_config.get("optimizer_model") or llm_config.get("model"),
+        api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+        base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+        purpose="optimizer",
     )
+    session_store.append_trace(session_id, {
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+        "node": "rca_analyzer", "model": llm.model_name, "event": "start",
+        "details": {"iteration": iteration, "rules_below_target": len(state["parameters_below_target"])},
+    })
 
     records = dict(state["parameter_records"])
     ground_truth_map = state["ground_truth_map"]
@@ -135,8 +142,15 @@ async def _run_rca(
         f"Error classification:\n{error_labels}\n\n"
         f"Error cases ({len(error_cases)} shown):\n{cases_text}\n\n"
         f"{ask}\n\n"
-        "Provide a concise analysis (3–5 sentences) identifying the root cause(s) "
-        "and what specifically needs to change in the description."
+        "Respond using this EXACT format (plain English, no markdown, no asterisks, no jargon):\n\n"
+        "Root cause: <one sentence in plain English — what the evaluation rule is getting wrong>\n\n"
+        "Why it's failing:\n"
+        "• <specific pattern observed in the error cases above>\n"
+        "• <second pattern, or omit if only one pattern>\n\n"
+        "What to improve: <one sentence on the specific change the wording needs>\n\n"
+        "Use everyday language. Do not use the terms 'false positive', 'false negative', 'LLM', "
+        "'model', 'description', or 'criterion'. Instead say 'incorrectly marked as Yes', "
+        "'incorrectly marked as No', 'the evaluation rule', 'the wording'."
     )
 
     response = await llm.ainvoke([

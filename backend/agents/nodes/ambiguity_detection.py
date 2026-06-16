@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
@@ -41,7 +42,15 @@ _SYSTEM = (
     "For answer rules that are part of a trigger/answer pair: never ask about scenarios where the trigger condition "
     "is absent, not applicable, or has not fired. When the trigger rule does not fire, the evaluation engine "
     "automatically marks the answer rule Not Applicable — the answer description has nothing to handle for that case. "
-    "Ask only about what the agent must do when the scenario IS in scope."
+    "Ask only about what the agent must do when the scenario IS in scope.\n"
+    "AUDIENCE RULE: Write every question in plain, everyday language that a non-technical call centre "
+    "QA manager or supervisor can understand and answer without any knowledge of the evaluation system. "
+    "Never reference internal system concepts such as 'PASS criterion', 'PASS_CRITERIA', 'description', "
+    "'evaluation criteria', 'the rule', or 'this criterion'. Never use ML or QA-system jargon. "
+    "Ask about real-world observable behaviour only — frame as scope or boundary questions, for example: "
+    "'When an agent says X, does that count as Y?', 'Is Z enough to satisfy this?', "
+    "'If the agent only does A but not B, should that pass or fail?'. "
+    "Keep questions to 1–2 sentences."
 )
 
 _MAX_QUESTIONS_PER_RULE = 2
@@ -54,10 +63,16 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
 
     llm_config = state.get("llm_config", {})
     llm = get_llm(
-        model=llm_config.get("model"),
-        api_key=llm_config.get("api_key"),
-        base_url=llm_config.get("base_url"),
+        model=llm_config.get("optimizer_model") or llm_config.get("model"),
+        api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+        base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+        purpose="optimizer",
     )
+    session_store.append_trace(state["session_id"], {
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+        "node": "ambiguity_detection", "model": llm.model_name, "event": "start",
+        "details": {"rules": len(state["rules"])},
+    })
 
     all_questions: list[ClarifyingQuestion] = []
 

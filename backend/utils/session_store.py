@@ -25,6 +25,16 @@ class SessionStore:
             if session_id in self._store:
                 self._store[session_id].setdefault("progress_log", []).append(message)
 
+    def append_trace(self, session_id: str, entry: dict) -> None:
+        with self._lock:
+            if session_id in self._store:
+                self._store[session_id].setdefault("trace_log", []).append(entry)
+
+    def get_trace(self, session_id: str) -> list:
+        with self._lock:
+            session = self._store.get(session_id)
+            return list(session.get("trace_log", [])) if session else []
+
     def delete(self, session_id: str) -> bool:
         with self._lock:
             return self._store.pop(session_id, None) is not None

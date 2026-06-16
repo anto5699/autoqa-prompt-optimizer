@@ -123,7 +123,7 @@ const CSV_SAMPLE = [
         <div>
           <div class="section-label">Model Configuration</div>
 
-          <!-- Mode selector -->
+          <!-- Mode selector (shared credentials) -->
           <div class="mode-tabs">
             <button class="mode-tab" [class.active]="configMode==='default'" (click)="setMode('default')">
               Default (.env)
@@ -148,16 +148,7 @@ const CSV_SAMPLE = [
             <input class="input" type="text" [(ngModel)]="modelConfig.baseUrl" placeholder="https://api.openai.com/v1" (ngModelChange)="onConfigChange()">
           </div>
 
-          <!-- Model: dropdown when models are available, text input otherwise -->
-          <div class="field">
-            <label>Model</label>
-            <select class="input" *ngIf="availableModels.length > 0" [(ngModel)]="modelConfig.model" (ngModelChange)="onConfigChange()">
-              <option *ngFor="let m of availableModels" [value]="m">{{ m }}</option>
-            </select>
-            <input class="input mono" type="text" *ngIf="availableModels.length === 0"
-                   [(ngModel)]="modelConfig.model" placeholder="gpt-4o" (ngModelChange)="onConfigChange()">
-          </div>
-
+          <!-- Test connection (shared) -->
           <div class="conn-row">
             <button class="test-btn"
                     [class.success]="connState==='success'"
@@ -173,6 +164,77 @@ const CSV_SAMPLE = [
             <span *ngIf="connMessage" class="conn-msg" [class.conn-success]="connState==='success'" [class.conn-error]="connState==='error'">
               {{ connMessage }}
             </span>
+          </div>
+
+          <!-- Model selectors -->
+          <div class="model-rows" [class.models-locked]="connState !== 'success'">
+            <div class="model-row">
+              <div class="model-row-label">
+                <label>Evaluation Model</label>
+                <span class="model-caption">Applied to conversations — use your planned production model</span>
+              </div>
+              <div>
+                <select class="input" *ngIf="availableModels.length > 0" [(ngModel)]="modelConfig.model" [disabled]="connState !== 'success'">
+                  <option *ngFor="let m of availableModels" [value]="m">{{ m }}</option>
+                </select>
+                <input class="input mono" type="text" *ngIf="availableModels.length === 0"
+                       [(ngModel)]="modelConfig.model" placeholder="gpt-4o" [disabled]="connState !== 'success'">
+              </div>
+            </div>
+            <div class="model-row">
+              <div class="model-row-label">
+                <label>Reasoning Model</label>
+                <span class="model-caption">Used for prompt optimization, RCA &amp; analysis</span>
+              </div>
+              <div>
+                <select class="input" *ngIf="reasoningModels.length > 0" [(ngModel)]="modelConfig.optimizerModel" [disabled]="connState !== 'success'">
+                  <option *ngFor="let m of reasoningModels" [value]="m">{{ m }}</option>
+                </select>
+                <input class="input mono" type="text" *ngIf="reasoningModels.length === 0"
+                       [(ngModel)]="modelConfig.optimizerModel" placeholder="gpt-4o" [disabled]="connState !== 'success'">
+              </div>
+            </div>
+          </div>
+          <p *ngIf="connState !== 'success'" class="models-hint">Test connection above to unlock model selection</p>
+
+          <!-- Toggle: different endpoint for reasoning model -->
+          <div class="opt-toggle-row">
+            <label>
+              <input type="checkbox" [(ngModel)]="modelConfig.useCustomOptimizerEndpoint" (ngModelChange)="onToggleOptEndpoint()">
+              Use different endpoint for Reasoning Model
+            </label>
+          </div>
+
+          <!-- Custom optimizer endpoint panel -->
+          <div class="opt-panel" *ngIf="modelConfig.useCustomOptimizerEndpoint">
+            <div class="mode-tabs">
+              <button class="mode-tab" [class.active]="optConfigMode==='custom-key'" (click)="setOptMode('custom-key')">Custom Key</button>
+              <button class="mode-tab" [class.active]="optConfigMode==='custom-endpoint'" (click)="setOptMode('custom-endpoint')">Custom Endpoint</button>
+            </div>
+            <div class="field">
+              <label>Reasoning API Key</label>
+              <input class="input" type="password" [(ngModel)]="modelConfig.optimizerApiKey" placeholder="sk-…" (ngModelChange)="onOptConfigChange()">
+            </div>
+            <div class="field" *ngIf="optConfigMode === 'custom-endpoint'">
+              <label>Reasoning Base URL</label>
+              <input class="input" type="text" [(ngModel)]="modelConfig.optimizerBaseUrl" placeholder="https://api.openai.com/v1" (ngModelChange)="onOptConfigChange()">
+            </div>
+            <div class="conn-row">
+              <button class="test-btn"
+                      [class.success]="optConnState==='success'"
+                      [class.error]="optConnState==='error'"
+                      [disabled]="optTesting"
+                      (click)="testOptimizerConnection()">
+                <span *ngIf="optTesting" class="spinner"></span>
+                <ng-container *ngIf="!optTesting">
+                  {{ optConnState === 'success' ? '✓ Connected' : optConnState === 'error' ? '✗ Failed' : 'Test Reasoning Connection' }}
+                </ng-container>
+                <ng-container *ngIf="optTesting">Testing…</ng-container>
+              </button>
+              <span *ngIf="optConnMessage" class="conn-msg" [class.conn-success]="optConnState==='success'" [class.conn-error]="optConnState==='error'">
+                {{ optConnMessage }}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -201,12 +263,26 @@ export class UploadComponent {
   csvCols = CSV_COLS;
   csvSample = CSV_SAMPLE;
 
-  modelConfig: ModelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+  modelConfig: ModelConfig = {
+    model: 'gpt-4o', apiKey: '', baseUrl: '',
+    optimizerModel: 'gpt-4o', useCustomOptimizerEndpoint: false,
+    optimizerApiKey: '', optimizerBaseUrl: '',
+  };
   testing = false;
   connState: 'idle' | 'testing' | 'success' | 'error' = 'idle';
   connMessage = '';
   configMode: 'default' | 'custom-key' | 'custom-endpoint' = 'default';
   availableModels: string[] = [];
+
+  optConfigMode: 'custom-key' | 'custom-endpoint' = 'custom-key';
+  optConnState: 'idle' | 'testing' | 'success' | 'error' = 'idle';
+  optConnMessage = '';
+  optTesting = false;
+  optAvailableModels: string[] = [];
+
+  get reasoningModels(): string[] {
+    return this.modelConfig.useCustomOptimizerEndpoint ? this.optAvailableModels : this.availableModels;
+  }
 
   constructor(private svc: SessionService, private router: Router) {}
 
@@ -215,12 +291,13 @@ export class UploadComponent {
     this.availableModels = [];
     this.connState = 'idle';
     this.connMessage = '';
+    const { optimizerModel, useCustomOptimizerEndpoint, optimizerApiKey, optimizerBaseUrl } = this.modelConfig;
     if (mode === 'default') {
-      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '', optimizerModel, useCustomOptimizerEndpoint, optimizerApiKey, optimizerBaseUrl };
     } else if (mode === 'custom-key') {
-      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '' };
+      this.modelConfig = { model: 'gpt-4o', apiKey: '', baseUrl: '', optimizerModel, useCustomOptimizerEndpoint, optimizerApiKey, optimizerBaseUrl };
     } else {
-      this.modelConfig = { model: '', apiKey: '', baseUrl: '' };
+      this.modelConfig = { model: '', apiKey: '', baseUrl: '', optimizerModel, useCustomOptimizerEndpoint, optimizerApiKey, optimizerBaseUrl };
     }
   }
 
@@ -228,6 +305,67 @@ export class UploadComponent {
     this.connState = 'idle';
     this.connMessage = '';
     this.availableModels = [];
+  }
+
+  setOptMode(mode: 'custom-key' | 'custom-endpoint') {
+    this.optConfigMode = mode;
+    this.optAvailableModels = [];
+    this.optConnState = 'idle';
+    this.optConnMessage = '';
+    if (mode === 'custom-key') {
+      this.modelConfig.optimizerBaseUrl = '';
+    }
+  }
+
+  onToggleOptEndpoint() {
+    if (!this.modelConfig.useCustomOptimizerEndpoint) {
+      this.modelConfig.optimizerApiKey = '';
+      this.modelConfig.optimizerBaseUrl = '';
+      this.optConnState = 'idle';
+      this.optConnMessage = '';
+      this.optAvailableModels = [];
+    }
+  }
+
+  onOptConfigChange() {
+    this.optConnState = 'idle';
+    this.optConnMessage = '';
+    this.optAvailableModels = [];
+  }
+
+  testOptimizerConnection() {
+    this.optTesting = true;
+    this.optConnState = 'idle';
+    this.optConnMessage = '';
+    const optConfig: ModelConfig = {
+      model: this.modelConfig.optimizerModel,
+      apiKey: this.modelConfig.optimizerApiKey,
+      baseUrl: this.modelConfig.optimizerBaseUrl,
+      optimizerModel: '', useCustomOptimizerEndpoint: false, optimizerApiKey: '', optimizerBaseUrl: '',
+    };
+    this.svc.validateModelConfig(optConfig).subscribe({
+      next: r => {
+        this.optTesting = false;
+        if (r.valid) {
+          this.optConnState = 'success';
+          this.optConnMessage = `Connected · ${r.model_used ?? this.modelConfig.optimizerModel}`;
+          if (r.models && r.models.length > 0) {
+            this.optAvailableModels = r.models;
+            if (!this.optAvailableModels.includes(this.modelConfig.optimizerModel)) {
+              this.modelConfig.optimizerModel = this.optAvailableModels[0];
+            }
+          }
+        } else {
+          this.optConnState = 'error';
+          this.optConnMessage = r.error ?? 'Validation failed';
+        }
+      },
+      error: e => {
+        this.optTesting = false;
+        this.optConnState = 'error';
+        this.optConnMessage = e.error?.detail ?? 'Connection test failed';
+      }
+    });
   }
 
   onFile(e: Event) {

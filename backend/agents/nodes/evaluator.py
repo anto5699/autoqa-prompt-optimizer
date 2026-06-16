@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -65,6 +66,11 @@ async def evaluator(state: OptimizationState) -> dict:
         api_key=llm_config.get("api_key"),
         base_url=llm_config.get("base_url"),
     )
+    session_store.append_trace(session_id, {
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+        "node": "evaluator", "model": llm.model_name, "event": "start",
+        "details": {"iteration": iteration, "conversations": len(conversations), "rules": len(rules_to_evaluate)},
+    })
     semaphore = asyncio.Semaphore(settings.max_concurrent_llm_calls)
 
     async def evaluate_one(conv: dict[str, Any]) -> tuple[str, list]:

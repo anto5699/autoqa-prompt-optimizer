@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
@@ -69,10 +70,16 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
     try:
         llm_config = state.get("llm_config", {})
         llm = get_llm(
-            model=llm_config.get("model"),
-            api_key=llm_config.get("api_key"),
-            base_url=llm_config.get("base_url"),
+            model=llm_config.get("optimizer_model") or llm_config.get("model"),
+            api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+            base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+            purpose="optimizer",
         )
+        session_store.append_trace(session_id, {
+            "ts": datetime.now(tz=timezone.utc).isoformat(),
+            "node": "prompt_optimizer", "model": llm.model_name, "event": "start",
+            "details": {"iteration": iteration, "rules_below_target": len(below_target)},
+        })
     except Exception as exc:
         session_store.append_log(session_id, f"ERROR: Could not initialise LLM — {exc}")
         logger.error("session=%s prompt_optimizer LLM init failed: %s", session_id, exc)

@@ -147,6 +147,40 @@
 .cta-hint { text-align: center; margin-top: 8px; font-size: 0.78rem; color: #9ca3af; }
 .error-msg { color: var(--red); font-size: 0.88rem; }
 
+/* Dual model selectors */
+.model-rows { display: flex; flex-direction: column; gap: 12px; margin: 14px 0 10px; }
+.model-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.model-row-label { flex: 1; }
+.model-row-label label { font-size: 0.82rem; font-weight: 600; color: #374151; display: block; margin-bottom: 0; }
+.model-caption { font-size: 0.74rem; color: #9ca3af; display: block; margin-top: 2px; line-height: 1.4; }
+.model-row select.input, .model-row input.input { width: 200px; flex-shrink: 0; }
+
+/* Optimizer endpoint toggle */
+.opt-toggle-row { margin: 6px 0 0; }
+.opt-toggle-row label {
+  font-size: 0.82rem; color: #6b7280; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; user-select: none;
+}
+.opt-toggle-row input[type="checkbox"] { cursor: pointer; width: 14px; height: 14px; accent-color: var(--accent); }
+
+/* Custom optimizer endpoint panel */
+.opt-panel {
+  margin-top: 14px; padding: 16px 18px;
+  background: #f8f9fb; border: 1px solid #e5e7eb; border-radius: 10px;
+}
+.opt-panel .mode-tabs { margin-bottom: 14px; }
+.opt-panel .field { margin-bottom: 12px; }
+.opt-panel .field:last-of-type { margin-bottom: 14px; }
+
+/* Connection message colour (used by both primary and optimizer rows) */
+.conn-msg.conn-success { color: #16a34a; }
+.conn-msg.conn-error   { color: #dc2626; }
+
+/* Locked model rows (before test connection succeeds) */
+.models-locked .model-row { opacity: 0.45; pointer-events: none; }
+.models-hint { font-size: 0.74rem; color: #9ca3af; margin: 4px 0 0; }
+select.input:disabled, input.input:disabled { opacity: 0.6; cursor: not-allowed; background: #f9fafb; }
+
 /* Mode selector tabs */
 .mode-tabs {
   display: flex;

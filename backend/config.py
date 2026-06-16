@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+    openai_optimizer_model: str = "gpt-4o"
     max_concurrent_llm_calls: int = 5
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:4200"
@@ -44,11 +45,16 @@ Respond with ONLY a valid JSON array — one object per rule — in this exact f
 Do not include any text outside the JSON array."""
 
 
-def get_llm(model: str = None, api_key: str = None, base_url: str = None):
-    """Return a ChatOpenAI or AzureChatOpenAI instance. Params fall back to settings when falsy."""
+def get_llm(model: str = None, api_key: str = None, base_url: str = None, purpose: str = "evaluator"):
+    """Return a ChatOpenAI or AzureChatOpenAI instance. Params fall back to settings when falsy.
+
+    purpose="evaluator" falls back to OPENAI_MODEL; purpose="optimizer" falls back to OPENAI_OPTIMIZER_MODEL.
+    """
     import re
 
     effective_base_url = base_url or None
+    default_model = settings.openai_optimizer_model if purpose == "optimizer" else settings.openai_model
+    effective_model = model or default_model
 
     if effective_base_url and ".openai.azure.com" in effective_base_url:
         from langchain_openai import AzureChatOpenAI
@@ -57,7 +63,7 @@ def get_llm(model: str = None, api_key: str = None, base_url: str = None):
         azure_endpoint = endpoint_match.group(1) if endpoint_match else effective_base_url
 
         dep_match = re.search(r"/deployments/([^/?]+)", effective_base_url)
-        azure_deployment = dep_match.group(1) if dep_match else (model or settings.openai_model)
+        azure_deployment = dep_match.group(1) if dep_match else effective_model
 
         return AzureChatOpenAI(
             azure_endpoint=azure_endpoint,
@@ -71,7 +77,7 @@ def get_llm(model: str = None, api_key: str = None, base_url: str = None):
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
-        model=model or settings.openai_model,
+        model=effective_model,
         temperature=0,
         top_p=1,
         frequency_penalty=0,

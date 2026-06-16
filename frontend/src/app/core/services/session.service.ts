@@ -24,6 +24,11 @@ export class SessionService {
       fd.append('model_name', modelConfig.model);
       fd.append('api_key_override', modelConfig.apiKey);
       fd.append('base_url', modelConfig.baseUrl);
+      if (modelConfig.optimizerModel) fd.append('optimizer_model_name', modelConfig.optimizerModel);
+      if (modelConfig.useCustomOptimizerEndpoint) {
+        if (modelConfig.optimizerApiKey) fd.append('optimizer_api_key_override', modelConfig.optimizerApiKey);
+        if (modelConfig.optimizerBaseUrl) fd.append('optimizer_base_url', modelConfig.optimizerBaseUrl);
+      }
     }
     return this.http.post<CreateSessionResponse>('/api/sessions', fd);
   }

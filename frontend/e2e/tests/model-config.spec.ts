@@ -28,9 +28,12 @@ test.describe('Model configuration UI', () => {
     await expect(page.locator('input[placeholder="https://api.openai.com/v1"]')).toBeVisible();
   });
 
-  test('model field shows text input before test connection', async ({ page }) => {
-    await expect(page.locator('input[placeholder="gpt-4o"]')).toBeVisible();
-    await expect(page.locator('select')).not.toBeVisible();
+  test('model field shows text inputs (not dropdowns) before test connection', async ({ page }) => {
+    // Before connection no models are fetched, so both model rows show plain text inputs
+    const evalInput = page.locator('.model-rows .model-row').nth(0).locator('input[type="text"]');
+    await expect(evalInput).toBeVisible();
+    // No select elements inside model-rows before connection
+    await expect(page.locator('.model-rows select')).toHaveCount(0);
   });
 
   test('Test Connection is enabled on all modes', async ({ page }) => {
@@ -49,7 +52,10 @@ test.describe('Model configuration UI', () => {
     await page.getByRole('button', { name: /Test Connection/i }).click();
 
     await expect(page.locator('.conn-success')).toContainText('Connected', { timeout: 30_000 });
-    await expect(page.locator('select')).toBeVisible();
+    // After connection both Evaluation and Reasoning model dropdowns should appear
+    await expect(page.locator('.model-rows select')).toHaveCount(2);
+    await expect(page.locator('.model-rows select').nth(0)).toBeEnabled();
+    await expect(page.locator('.model-rows select').nth(1)).toBeEnabled();
   });
 
   test('Test Connection shows error badge with invalid API key', async ({ page }) => {

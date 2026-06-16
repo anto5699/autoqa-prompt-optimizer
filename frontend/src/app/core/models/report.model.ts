@@ -33,6 +33,7 @@ export interface ParameterReport {
   optimization_notes?: string;
   iteration_history: IterationEntry[];
   rca_findings?: string;
+  report_summary?: string;
   regression_warning?: { message: string };
   recommendations: string[];
   conversation_results: ConversationResult[];

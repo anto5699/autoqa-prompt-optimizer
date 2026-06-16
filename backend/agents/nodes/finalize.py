@@ -1,10 +1,94 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from agents.state import OptimizationState
+from config import get_llm, settings
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_SYSTEM = (
+    "You are a QA expert writing plain-language summaries for call centre managers. "
+    "Be concise, specific, and avoid technical jargon."
+)
+_MAX_DESCRIPTION_CHARS = 300
+
+
+async def _generate_optimization_summary(
+    rule_id: str, record: dict, initial_acc: float, final_acc: float, llm
+) -> str:
+    history = record.get("iteration_history", [])
+    trajectory = " → ".join(f"{h['accuracy']:.0%}" for h in history) if history else "N/A"
+
+    descriptions = [
+        f"Iteration {h['iteration']}: {h['description'][:_MAX_DESCRIPTION_CHARS]}"
+        for h in history
+        if h.get("description")
+    ]
+    desc_section = (
+        "How the rule wording changed across iterations:\n" + "\n".join(descriptions[:5]) + "\n\n"
+        if descriptions else ""
+    )
+
+    original = (record.get("original_description") or "(none)").strip()
+
+    prompt = (
+        f"Parameter: {rule_id}\n"
+        f"Initial accuracy: {initial_acc:.0%}  →  Final accuracy: {final_acc:.0%}\n"
+        f"Accuracy across iterations: {trajectory}\n\n"
+        f"Original user description:\n{original}\n\n"
+        f"{desc_section}"
+        "Write a 2–3 sentence plain-English summary for a non-technical QA manager explaining:\n"
+        "1. Why the evaluation rule was initially inaccurate\n"
+        "2. What key changes were made across the optimization iterations to improve it\n\n"
+        "Use this EXACT format (no markdown, no asterisks, no bullet points, no jargon):\n\n"
+        "Why it was initially inaccurate: <one sentence in plain everyday language>\n\n"
+        "What was improved: <one or two sentences describing the key changes>\n\n"
+        "Do not say 'false positive', 'false negative', 'LLM', 'model', 'description', "
+        "or 'criterion'. Say 'the evaluation rule' and 'the wording' instead."
+    )
+
+    response = await llm.ainvoke([
+        SystemMessage(content=_SUMMARY_SYSTEM),
+        HumanMessage(content=prompt),
+    ])
+    return response.content.strip()
+
+
+async def _generate_failure_summary(
+    rule_id: str, record: dict, final_acc: float, target_acc: float, llm
+) -> str:
+    history = record.get("iteration_history", [])
+    trajectory = " → ".join(f"{h['accuracy']:.0%}" for h in history) if history else "N/A"
+    rca = (record.get("rca_findings") or "(no root cause analysis available)").strip()
+
+    prompt = (
+        f"Parameter: {rule_id}\n"
+        f"Target accuracy: {target_acc:.0%}  |  Final accuracy: {final_acc:.0%}\n"
+        f"Accuracy across {len(history)} iterations: {trajectory}\n\n"
+        f"Root cause analysis:\n{rca}\n\n"
+        "Write a plain-English report for a non-technical QA manager explaining:\n"
+        "1. Why this evaluation rule could not reach the accuracy target\n"
+        "2. Specific, actionable next steps a human should take to resolve this\n\n"
+        "Use this EXACT format (no markdown, no asterisks, no jargon):\n\n"
+        "Why it did not converge: <one sentence in plain everyday language>\n\n"
+        "What was attempted: <one sentence on what the optimiser tried across iterations>\n\n"
+        "Recommended next steps:\n"
+        "• <specific action>\n"
+        "• <specific action>\n"
+        "• <third action if applicable>\n\n"
+        "Do not say 'false positive', 'false negative', 'LLM', 'model', 'description', "
+        "or 'criterion'. Say 'the evaluation rule' and 'the wording' instead."
+    )
+
+    response = await llm.ainvoke([
+        SystemMessage(content=_SUMMARY_SYSTEM),
+        HumanMessage(content=prompt),
+    ])
+    return response.content.strip()
 
 
 async def finalize(state: OptimizationState) -> dict:
@@ -90,6 +174,38 @@ async def finalize(state: OptimizationState) -> dict:
             "recommendations": _build_recommendations(record),
             "conversation_results": conversation_results,
         }
+
+    # Generate plain-language report summaries for every parameter in parallel
+    llm_config = state.get("llm_config", {})
+    llm = get_llm(
+        model=llm_config.get("optimizer_model") or llm_config.get("model"),
+        api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+        base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+        purpose="optimizer",
+    )
+    sem = asyncio.Semaphore(settings.max_concurrent_llm_calls)
+    target_acc = state["accuracy_target"]
+
+    async def _gen_summary(rule_id: str):
+        record = records[rule_id]
+        final_acc = record["current_accuracy"]
+        async with sem:
+            try:
+                if record["status"] == "converged":
+                    initial_acc = record.get("initial_accuracy") or final_acc
+                    text = await _generate_optimization_summary(rule_id, record, initial_acc, final_acc, llm)
+                else:
+                    text = await _generate_failure_summary(rule_id, record, final_acc, target_acc, llm)
+                return rule_id, text
+            except Exception as exc:
+                logger.warning("session=%s rule_id=%s report_summary failed: %s", state["session_id"], rule_id, exc)
+                return rule_id, None
+
+    session_store.update(state["session_id"], {"current_phase": "generating_report"})
+    summaries = await asyncio.gather(*[_gen_summary(rid) for rid in records])
+    for rule_id, summary in summaries:
+        if summary:
+            parameters_report[rule_id]["report_summary"] = summary
 
     models_used = (session_store.get(state["session_id"]) or {}).get("models_used", {})
 

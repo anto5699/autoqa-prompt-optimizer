@@ -170,18 +170,14 @@ type FilterKey = 'all' | 'converged' | 'not-met';
             </div>
           </div>
 
-          <!-- RCA -->
-          <div *ngIf="entry.val.rca_findings" class="rca-box">
-            <div class="rca-title">Root Cause Analysis</div>
-            <p class="rca-text">{{ entry.val.rca_findings }}</p>
-          </div>
-
-          <!-- Recommendations -->
-          <div *ngIf="entry.val.recommendations?.length" class="rec-box">
-            <div class="rec-title">Recommendations</div>
-            <ul class="rec-list">
-              <li *ngFor="let r of entry.val.recommendations">{{ r }}</li>
-            </ul>
+          <!-- Report Summary -->
+          <div *ngIf="entry.val.report_summary" class="report-summary-box"
+               [class.summary-converged]="entry.val.status === 'converged'"
+               [class.summary-not-met]="entry.val.status !== 'converged'">
+            <div class="report-summary-title">
+              {{ entry.val.status === 'converged' ? 'How This Parameter Was Improved' : 'Why This Parameter Did Not Meet the Target' }}
+            </div>
+            <pre class="report-summary-text">{{ entry.val.report_summary }}</pre>
           </div>
 
           <!-- Optimization notes -->

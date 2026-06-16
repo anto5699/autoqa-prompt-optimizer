@@ -229,24 +229,14 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           </div>
         </div>
 
-        <!-- RCA -->
-        <div *ngIf="e.val.status === 'max_iterations_reached'" class="print-rca-block">
-          <div class="print-rca-title">Root Cause Analysis — Why This Parameter Did Not Converge</div>
-          <p *ngIf="e.val.rca_findings" class="print-rca-text">{{ e.val.rca_findings }}</p>
-          <p *ngIf="!e.val.rca_findings" class="print-rca-text print-rca-na">No RCA data available for this parameter.</p>
-          <div *ngIf="e.val.recommendations?.length" class="print-recs">
-            <div class="print-recs-title">Recommendations</div>
-            <ul><li *ngFor="let r of e.val.recommendations">{{ r }}</li></ul>
+        <!-- Report Summary -->
+        <div *ngIf="e.val.report_summary" class="print-report-summary"
+             [class.print-summary-converged]="e.val.status === 'converged'"
+             [class.print-summary-not-met]="e.val.status !== 'converged'">
+          <div class="print-summary-title">
+            {{ e.val.status === 'converged' ? 'How This Parameter Was Improved' : 'Why This Parameter Did Not Meet the Target' }}
           </div>
-          <div *ngIf="!e.val.recommendations?.length" class="print-recs">
-            <div class="print-recs-title">General Recommendations</div>
-            <ul>
-              <li>Review the description for ambiguous language that cannot be determined from transcript text alone.</li>
-              <li>Examine false positives and false negatives to understand where the model misclassifies.</li>
-              <li>Tighten PASS criteria with explicit examples if false positives dominate; broaden if false negatives dominate.</li>
-              <li>Verify that ground truth labels are consistent across annotators.</li>
-            </ul>
-          </div>
+          <pre class="print-summary-text">{{ e.val.report_summary }}</pre>
         </div>
 
         <!-- Regression warning -->
@@ -364,14 +354,16 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
     .prompt-copy-btn { font-size: 0.72rem; padding: 3px 10px; border: 1px solid #16a34a; border-radius: 6px; background: #fff; color: #16a34a; cursor: pointer; font-weight: 600; flex-shrink: 0; }
     .prompt-copy-btn:hover { background: #f0fdf4; }
 
-    /* RCA */
-    .print-rca-block { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 16px; margin-bottom: 1rem; }
-    .print-rca-title { font-size: 0.85rem; font-weight: 700; color: #9a3412; margin-bottom: 6px; }
-    .print-rca-text  { font-size: 0.88rem; color: #431407; margin: 0 0 8px; line-height: 1.55; }
-    .print-rca-na    { color: #9a3412; font-style: italic; }
-    .print-recs-title { font-size: 0.8rem; font-weight: 600; color: #374151; margin: 8px 0 4px; }
-    .print-recs ul   { margin: 0; padding-left: 1.2rem; font-size: 0.85rem; color: #374151; }
-    .print-recs li   { margin-bottom: 3px; }
+    /* Report Summary */
+    .print-report-summary { border-radius: 8px; padding: 12px 16px; margin-bottom: 1rem; }
+    .print-summary-converged { background: #f0fdf4; border: 1px solid #86efac; }
+    .print-summary-not-met   { background: #fff7ed; border: 1px solid #fed7aa; }
+    .print-summary-title { font-size: 0.82rem; font-weight: 700; margin-bottom: 6px; }
+    .print-summary-converged .print-summary-title { color: #15803d; }
+    .print-summary-not-met   .print-summary-title { color: #9a3412; }
+    .print-summary-text { font-family: inherit; font-size: 0.85rem; color: inherit; line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0; }
+    .print-summary-converged .print-summary-text { color: #14532d; }
+    .print-summary-not-met   .print-summary-text { color: #431407; }
 
     /* Regression warning */
     .print-regression { font-size: 0.82rem; color: #991b1b; background: #fee2e2; border-radius: 6px; padding: 8px 12px; margin-top: 8px; }

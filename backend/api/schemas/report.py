@@ -41,6 +41,7 @@ class ParameterReport(BaseModel):
     optimization_notes: Optional[str] = None
     iteration_history: List[Dict[str, Any]]
     rca_findings: Optional[str] = None
+    report_summary: Optional[str] = None
     regression_warning: Optional[Dict[str, Any]] = None
     recommendations: List[str]
     conversation_results: List[Dict[str, Any]] = Field(default_factory=list)

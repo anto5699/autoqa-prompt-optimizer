@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     openai_optimizer_model: str = "gpt-4o"
     max_concurrent_llm_calls: int = 5
+    rules_batch_size: int = 6
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:4200"
 

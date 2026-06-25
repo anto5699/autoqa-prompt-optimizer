@@ -11,7 +11,7 @@ An agentic system that autonomously optimizes LLM evaluation prompts for contact
 Upload CSV  →  Enter Descriptions  →  Answer Clarifications  →  Watch Optimization  →  Export Results
 ```
 
-1. **Upload** a CSV of conversations paired with per-rule ground truth labels (Yes / No / NA)
+1. **Upload** a CSV of conversations paired with per-metric ground truth labels (Yes / No / NA)
 2. **Describe** what each evaluation parameter means in plain language
 3. **Answer** any clarifying questions the system asks about ambiguous rules
 4. **Watch** the agent iterate: evaluate → analyse failures → rewrite descriptions → repeat
@@ -64,8 +64,10 @@ Create `backend/.env` (see `backend/.env.example`):
 | Variable | Default | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | *(required)* | Your OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o` | Model for all LLM calls. `gpt-4o-mini` works for lower cost |
+| `OPENAI_MODEL` | `gpt-4o` | Model used for conversation evaluation |
+| `OPENAI_OPTIMIZER_MODEL` | `gpt-4o` | Model used for prompt optimization, RCA, and analysis |
 | `MAX_CONCURRENT_LLM_CALLS` | `5` | Semaphore cap on parallel evaluator calls |
+| `RULES_BATCH_SIZE` | `6` | Number of rules bundled per LLM call in the evaluator. Match this to your production batch size for realistic accuracy measurements. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `CORS_ORIGINS` | `http://localhost:4200` | Allowed origins for the FastAPI backend |
 | `ACCURACY_TARGET` | `0.90` | Default accuracy target used if not specified at upload |
@@ -74,25 +76,35 @@ Create `backend/.env` (see `backend/.env.example`):
 
 ## CSV Format
 
-The input CSV has **one row per conversation × rule combination**. If you have 20 conversations and 4 rules, that is 80 rows.
+The input CSV uses a **wide format** — one row per conversation, one column per evaluation metric.
 
-### Column Reference
+### Required Columns
 
-| Column | Type | Description |
+| Column | Description |
+|---|---|
+| `ConversationID` | Unique identifier for the conversation |
+| `transcript` | The conversation text (see Transcript Format below) |
+| `<MetricName>` | One column per evaluation metric, e.g. `Greeting`, `Verification`. Values must be `Yes`, `No`, or `NA` (see Ground Truth Values below). Add as many metric columns as needed. |
+
+### Ground Truth Values
+
+Each metric column accepts the following values (case-insensitive):
+
+| Accepted value | Normalises to | Meaning |
 |---|---|---|
-| `conversation_id` | string | Unique identifier for the conversation. All rows sharing an ID use the same transcript. |
-| `transcript` | JSON string | Array of message objects (see format below) |
-| `rule_id` | string | Unique rule identifier. Use `rule_answer_N` for answer rules, `rule_trigger_N` for trigger rules, linked by the same suffix N. |
-| `rule_type` | `answer` \| `trigger` | `answer` — evaluates agent adherence. `trigger` — detects whether the scenario is in scope for this conversation. |
-| `speaker` | `agent` \| `customer` | Whose behaviour is being evaluated |
-| `evaluation_type` | `first` \| `last` \| `entire` | Which part of the conversation to consider: first N messages, last N messages, or the entire transcript |
-| `n_messages` | integer | Number of messages to consider when `evaluation_type` is `first` or `last`. Ignored for `entire`. |
-| `description` | string | Your initial natural-language description of what this rule checks. The optimizer will refine this. |
-| `ground_truth` | `Yes` \| `No` \| `NA` | Ground truth label. `NA` rows are excluded from all accuracy calculations. |
+| `Yes` / `yes` / `YES` | `Yes` | Agent adhered |
+| `No` / `no` / `NO` | `No` | Agent did not adhere |
+| `NA` / `na` | `NA` | Not applicable — excluded from accuracy math |
+| `N/A` / `n/a` | `NA` | Not applicable (slash variant) |
+| *(blank cell)* | `NA` | Not applicable |
 
-### Transcript JSON Format
+`NA` rows are excluded from all accuracy calculations. Denominator = TP + TN + FP + FN only.
 
-Each `transcript` cell is a JSON array of message objects:
+### Transcript Format
+
+The `transcript` column accepts two formats:
+
+**JSON array (preferred):** An array of message objects. Each object needs at minimum a `msg` field; `speaker`, `messageId`, and `timestamp` are optional but useful:
 
 ```json
 [
@@ -111,34 +123,20 @@ Each `transcript` cell is a JSON array of message objects:
 ]
 ```
 
-### Trigger vs Answer Rules (Dynamic Metrics)
-
-Some evaluation parameters only apply to conversations where a specific scenario occurred. These use a **trigger + answer pair**:
-
-- `rule_trigger_N` — detects whether the scenario is in scope (`isQualified: true/false`)
-- `rule_answer_N` — evaluates adherence, **linked to trigger_N by the same suffix**
-
-When a trigger rule returns `isQualified: false`, the corresponding answer rule ground truth is treated as `NA` and excluded from accuracy math.
-
-Static metrics (always applicable) have an answer rule only — no trigger.
+**Plain text:** If the transcript column contains plain text rather than JSON, the system wraps it automatically and passes it to the LLM as-is. Timestamps and speaker labels embedded in the text are preserved. No conversion is required.
 
 ### Minimum Data Requirements
 
-Rules with fewer than 5 evaluable rows (non-NA ground truths) are excluded from the optimization run. Aim for at least 10–20 conversations per rule for reliable accuracy measurements.
+- At least **10 rows** (conversations) in the CSV
+- Metrics with fewer than **5 evaluable rows** (non-NA ground truths) are automatically excluded from the optimization run
+- Aim for at least 10–20 conversations per metric for reliable accuracy measurements
 
-### Example CSV
+### Example Row
 
-A 15-conversation × 4-rule demo CSV is included at `demo_conversations.csv`. It covers a retail support scenario with:
-
-- `rule_answer_1` — agent states their name in the first 2 messages
-- `rule_trigger_2` — customer provides an order number
-- `rule_answer_2` — agent repeats the order number verbatim (NA when trigger=No)
-- `rule_answer_3` — agent asks "is there anything else" in the last 2 messages
-
-Generate your own demo data:
-
-```bash
-python generate_demo_csv.py
+```
+ConversationID,transcript,Greeting,Verification,Closure
+conv_001,"[{""msg"":""Hi, Sarah speaking..."",""speaker"":""agent""}]",Yes,No,Yes
+conv_002,"[{""msg"":""Good morning..."",""speaker"":""agent""}]",Yes,NA,Yes
 ```
 
 ---
@@ -184,14 +182,13 @@ python generate_demo_csv.py
 | Node | Purpose |
 |---|---|
 | `ingestion` | Parses the uploaded CSV into per-rule `parameter_records`; validates state |
-| `baseline_generator` | Normalises all rule descriptions into the required structured format (METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES) before the first evaluation. Generates from scratch when no description is provided, rewrites from clarification answers when answers exist, and reformats plain-text descriptions that are already written but not in the structured format — without changing their meaning. |
+| `baseline_generator` | Normalises all rule descriptions into the required structured format (METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES) before the first evaluation. Generates from scratch when no description is provided, rewrites from clarification answers when answers exist, and reformats plain-text descriptions that are already written but not in the structured format — without changing their meaning. Generated descriptions are capped at 800 tokens. |
 | `ambiguity_detection` | LLM-classifies each description for ambiguity; generates up to 2 targeted clarification questions per ambiguous rule; pauses the graph via `interrupt()` |
-| `evaluator` | Sends **one LLM call per conversation** containing all rule descriptions; parses the JSON response into per-rule predictions |
+| `evaluator` | Sends LLM calls per conversation with rules batched in groups of `RULES_BATCH_SIZE`. Converged rules are excluded from evaluation to prevent LLM non-determinism from regressing parameters that already hit target. |
 | `benchmarking` | Computes accuracy / precision / recall / F1 per rule; regression guard reverts a description if it performs worse than the prior best |
 | `router` | Routes to `finalize_report` when all rules converge or the iteration cap is hit; otherwise continues to `rca_analyzer` |
 | `rca_analyzer` | Collects FP/FN examples with full transcripts; asks the LLM to identify the root cause of failures in the current description |
-| `prompt_optimizer` | Reads RCA findings, accuracy trajectory, and clarification answers; rewrites the description to address identified weaknesses; detects stagnation (4+ identical accuracy values) and forces a different rewrite strategy |
-| `evaluator` | Sends **one LLM call per conversation** containing all active (non-converged) rule descriptions; converged rules are skipped to prevent LLM non-determinism from regressing rules that already hit target |
+| `prompt_optimizer` | Reads RCA findings, accuracy trajectory, and clarification answers; rewrites the description to address identified weaknesses; detects stagnation (4+ identical accuracy values) and forces a different rewrite strategy. Rewrites are capped at 800 tokens. |
 | `finalize_report` | Assembles the structured result with per-rule metrics, optimized descriptions, regression warnings, and root cause analysis for rules that didn't converge |
 
 ### Optimization Loop
@@ -199,11 +196,12 @@ python generate_demo_csv.py
 ```
 For each iteration (up to max_iterations):
   1. Evaluate all conversations → per-rule confusion matrices
+     (rules batched in groups of RULES_BATCH_SIZE per conversation)
   2. Benchmark: compute accuracy, apply regression guard
   3. If all rules converged → stop
   4. For rules below target:
      a. RCA: identify why FP/FN cases failed
-     b. Optimizer: rewrite description addressing root causes
+     b. Optimizer: rewrite description addressing root causes (≤800 tokens)
   5. Repeat
 ```
 
@@ -256,7 +254,7 @@ Tests cover CSV parsing, accuracy metric calculation, benchmarking logic, regres
 
 - **In-memory only.** Session state is lost on server restart.
 - **Single-user.** No auth, no multi-tenancy.
-- **LLM cost.** Each iteration makes `N_conversations + N_rules_below_target` LLM calls. A 20-conversation × 4-rule run over 5 iterations costs roughly 600–1000 OpenAI API calls.
+- **LLM cost.** Each iteration makes roughly `ceil(N_rules / RULES_BATCH_SIZE) × N_conversations` evaluation calls plus one RCA + one optimizer call per underperforming rule. A 20-conversation × 4-rule run over 5 iterations with batch size 6 costs roughly 100–200 OpenAI API calls.
 - **Not for production.** This is an R&D prototype built for demonstrating the optimization concept.
 
 ---

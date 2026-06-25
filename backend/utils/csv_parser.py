@@ -7,7 +7,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 REQUIRED_FIXED_COLUMNS = {"ConversationID", "transcript"}
-_GT_MAP = {"yes": "Yes", "no": "No", "na": "NA"}
+_GT_MAP = {"yes": "Yes", "no": "No", "na": "NA", "n/a": "NA", "": "NA"}
 
 
 class CSVParseError(ValueError):
@@ -58,20 +58,19 @@ def parse(
                 f"{bad.index.tolist()}: must be 'Yes', 'No', or 'NA'"
             )
 
-    # 4. Transcript must be valid JSON array (deduplicated by ConversationID)
+    # 4. Transcript: JSON array preferred; plain text accepted and wrapped as single message
     parsed_transcripts: Dict[str, list] = {}
     for _, row in df.iterrows():
         conv_id = str(row["ConversationID"]).strip()
         if conv_id not in parsed_transcripts:
+            raw = str(row["transcript"])
             try:
-                parsed = json.loads(str(row["transcript"]))
+                parsed = json.loads(raw)
                 if not isinstance(parsed, list):
                     raise ValueError("transcript must be a JSON array")
                 parsed_transcripts[conv_id] = parsed
-            except (json.JSONDecodeError, ValueError) as exc:
-                raise CSVParseError(
-                    f"Invalid transcript JSON for ConversationID '{conv_id}': {exc}"
-                ) from exc
+            except (json.JSONDecodeError, ValueError):
+                parsed_transcripts[conv_id] = [{"speaker": "conversation", "msg": raw}]
 
     # 5. Minimum 10 rows
     if len(df) < 10:

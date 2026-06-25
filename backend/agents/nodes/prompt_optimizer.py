@@ -43,7 +43,8 @@ Format rules:
 - Transcript is text-only: never infer tone, intonation, warmth, voice quality, or prosodic cues — every criterion must be derivable from the written words alone
 - Adherence must be established from explicit verbal content in the transcript only — never from non-transcript actions (e.g., post-call system updates, CRM entries), implicit signals (e.g., agent hanging up), or behaviours that are not spoken in the conversation
 - Evaluation is binary: the agent either adhered or did not. Never introduce partial adherence, scoring, thresholds, or weighted criteria
-- Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description\
+- Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description
+- Your entire response must not exceed 800 tokens. Be concise — use 2-3 PASS_CRITERIA and 2 PASS/FAIL EXAMPLES only if needed to stay within the limit\
 """
 
 

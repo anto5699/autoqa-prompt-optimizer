@@ -44,7 +44,13 @@ Format rules:
 - Adherence must be established from explicit verbal content in the transcript only — never from non-transcript actions (e.g., post-call system updates, CRM entries), implicit signals (e.g., agent hanging up), or behaviours that are not spoken in the conversation
 - Evaluation is binary: the agent either adhered or did not. Never introduce partial adherence, scoring, thresholds, or weighted criteria
 - Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description
-- Your entire response must not exceed 800 tokens. Be concise — use 2-3 PASS_CRITERIA and 2 PASS/FAIL EXAMPLES only if needed to stay within the limit\
+- Your entire response must not exceed 800 tokens. Be concise — use 2-3 PASS_CRITERIA and 2 PASS/FAIL EXAMPLES only if needed to stay within the limit
+
+Generalisation rules:
+- Write criteria that generalise to conversations not in this sample. Never anchor PASS_CRITERIA to a specific phrase, sentence, or pattern you observe in the failure examples
+- The RCA failure examples are evidence of a failure pattern — write criteria that address the underlying observable behaviour, not the surface form of those specific transcripts
+- EXAMPLES in your output must be representative illustrative utterances you compose yourself; do not copy or closely paraphrase verbatim transcript content from the failure examples
+- After writing each criterion, apply this mental test: "Would this criterion produce the same verdict on a conversation I have not seen, if the same underlying behaviour is present?" If the answer depends on a specific phrase from the failure examples, reframe it in terms of the behaviour\
 """
 
 
@@ -91,7 +97,10 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
             "progress_log": [f"LLM initialisation failed: {exc}"],
         }
 
-    for rule_id in below_target:
+    total_rules = len(below_target)
+    session_store.update(session_id, {"node_progress": {"node": "optimizing_prompts", "step": 0, "total": total_rules}})
+
+    for idx, rule_id in enumerate(below_target):
         record = records[rule_id]
 
         session_store.append_log(session_id, f"Optimising description for {rule_id} (iteration {iteration + 1})…")
@@ -106,19 +115,40 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
         }
 
         rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
-        new_description = await _optimise_description(record, rule_answers, llm, session_id)
 
-        records[rule_id] = {
-            **record,
-            "iteration_history": [*record["iteration_history"], history_entry],
-            "current_description": new_description,
-            "current_predictions": {},
-            "optimization_notes": f"Optimised at iteration {iteration + 1}",
-        }
+        if record.get("rule_type") == "dynamic":
+            # Optimize trigger and answer descriptions independently
+            trigger_record = {
+                **record,
+                "rule_type": "trigger",
+                "rule_id": f"{rule_id} (trigger)",
+                "current_description": record.get("trigger_description") or "",
+                "speaker": record.get("trigger_speaker") or "customer",
+            }
+            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id)
+            new_description = await _optimise_description(record, rule_answers, llm, session_id)
+            records[rule_id] = {
+                **record,
+                "iteration_history": [*record["iteration_history"], history_entry],
+                "current_description": new_description,
+                "trigger_description": new_trigger_description,
+                "current_predictions": {},
+                "optimization_notes": f"Optimised at iteration {iteration + 1}",
+            }
+        else:
+            new_description = await _optimise_description(record, rule_answers, llm, session_id)
+            records[rule_id] = {
+                **record,
+                "iteration_history": [*record["iteration_history"], history_entry],
+                "current_description": new_description,
+                "current_predictions": {},
+                "optimization_notes": f"Optimised at iteration {iteration + 1}",
+            }
         msg = f"Description updated for {rule_id} (iteration {iteration + 1})"
         session_store.append_log(session_id, msg)
         completed_messages.append(msg)
         logger.info("session=%s rule_id=%s description updated for iteration %d", session_id, rule_id, iteration + 1)
+        session_store.set_node_progress(session_id, "optimizing_prompts", idx + 1, total_rules)
 
     return {
         "parameter_records": records,
@@ -194,7 +224,7 @@ async def _optimise_description(
         f"Rule type: {rule_type} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']} | n_messages: {record['n_messages']}\n\n"
         f"Current description:\n{record['current_description']}\n\n"
-        f"Root cause analysis:\n{record.get('rca_findings', 'No findings available.')}\n\n"
+        f"Root cause analysis (use as evidence of failure patterns — write criteria that address the underlying behaviour, not the specific phrases or cases shown):\n{record.get('rca_findings', 'No findings available.')}\n\n"
         f"{trajectory_line}"
         f"User clarifications:\n{clarifications}\n\n"
         f"Constraints: {constraints}\n\n"

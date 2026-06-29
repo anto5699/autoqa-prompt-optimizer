@@ -42,15 +42,23 @@ async def rca_analyzer(state: OptimizationState) -> dict:
     conversations_by_id = {c["conversation_id"]: c for c in state["conversations"]}
     below_target = state["parameters_below_target"]
 
-    for rule_id in below_target:
+    total_rules = len(below_target)
+    session_store.update(session_id, {"node_progress": {"node": "analyzing_failures", "step": 0, "total": total_rules}})
+
+    for idx, rule_id in enumerate(below_target):
         record = records[rule_id]
         session_store.append_log(session_id, f"  RCA: {rule_id}…")
         error_cases = _collect_error_cases(
-            rule_id, record["current_predictions"], ground_truth_map, conversations_by_id
+            rule_id,
+            record["current_predictions"],
+            record.get("current_rationales", {}),
+            ground_truth_map,
+            conversations_by_id,
         )
         findings = await _run_rca(rule_id, record, error_cases, session_id, llm)
         records[rule_id] = {**record, "rca_findings": findings}
         logger.info("session=%s rule_id=%s RCA complete", session_id, rule_id)
+        session_store.set_node_progress(session_id, "analyzing_failures", idx + 1, total_rules)
 
     return {
         "parameter_records": records,
@@ -62,6 +70,7 @@ async def rca_analyzer(state: OptimizationState) -> dict:
 def _collect_error_cases(
     rule_id: str,
     predictions: dict,
+    rationales: dict,
     ground_truth_map: dict,
     conversations_by_id: dict,
 ) -> list[dict]:
@@ -73,12 +82,19 @@ def _collect_error_cases(
         pred = predictions.get(conv_id, "No")
         if pred != gt:
             conv = conversations_by_id.get(conv_id, {})
+            if pred == "Yes":
+                error_type = "false_positive"
+            elif pred == "NA":
+                error_type = "missed_trigger"
+            else:
+                error_type = "false_negative"
             errors.append({
                 "conversation_id": conv_id,
                 "ground_truth": gt,
                 "prediction": pred,
-                "error_type": "false_positive" if pred == "Yes" else "false_negative",
+                "error_type": error_type,
                 "transcript": conv.get("transcript", []),
+                "rationale": rationales.get(conv_id, ""),
             })
             if len(errors) >= _MAX_ERROR_CASES:
                 break
@@ -110,6 +126,25 @@ async def _run_rca(
             "Identify what in the description causes misdetection: "
             "is it ambiguous phrasing, too broad, too narrow, or scope mismatch?"
         )
+        description_section = f"Current description:\n{record['current_description']}\n\n"
+    elif rule_type == "dynamic":
+        error_labels = (
+            "False positive = predicted Yes (adhered) but GT=No (not adhered).\n"
+            "False negative = predicted No (not adhered) but GT=Yes (adhered).\n"
+            "Missed trigger = predicted NA (scenario absent) but GT=Yes or GT=No (scenario was present)."
+        )
+        ask = (
+            "Identify whether the failure is in the trigger condition (failing to detect the scenario), "
+            "the answer condition (misclassifying adherence when scenario is present), or both. "
+            "Specify which description needs changing."
+        )
+        trigger_desc = record.get("trigger_description") or "(none)"
+        description_section = (
+            f"Trigger description (detects whether the scenario applies — speaker: {record.get('trigger_speaker', 'customer')}):\n"
+            f"{trigger_desc}\n\n"
+            f"Answer description (evaluates agent adherence when scenario is present — speaker: {record['speaker']}):\n"
+            f"{record['current_description']}\n\n"
+        )
     else:
         error_labels = (
             "False positive = LLM said adhered but GT=No.\n"
@@ -119,10 +154,12 @@ async def _run_rca(
             "Identify what in the description causes misclassification: "
             "vague criteria, missing specificity, implicit knowledge required, or scope mismatch?"
         )
+        description_section = f"Current description:\n{record['current_description']}\n\n"
 
     cases_text = "\n\n".join(
         f"[{i+1}] Error type: {e['error_type']}\n"
         f"Ground truth: {e['ground_truth']} | Prediction: {e['prediction']}\n"
+        f"Evaluator's stated reason: {e['rationale'] or '(none provided)'}\n"
         f"Transcript:\n{_format_transcript(e['transcript'])}"
         for i, e in enumerate(error_cases)
     )
@@ -137,10 +174,13 @@ async def _run_rca(
         f"Rule ID: {rule_id}\n"
         f"Rule type: {rule_type} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']}\n\n"
-        f"Current description:\n{record['current_description']}\n\n"
+        f"{description_section}"
         f"{trajectory_str}"
         f"Error classification:\n{error_labels}\n\n"
         f"Error cases ({len(error_cases)} shown):\n{cases_text}\n\n"
+        "The evaluator's stated reason shows how the wording was interpreted. "
+        "Treat it as evidence of the interpretation, not as a confirmed cause — "
+        "cross-check it against the transcript.\n\n"
         f"{ask}\n\n"
         "Respond using this EXACT format (plain English, no markdown, no asterisks, no jargon):\n\n"
         "Root cause: <one sentence in plain English — what the evaluation rule is getting wrong>\n\n"

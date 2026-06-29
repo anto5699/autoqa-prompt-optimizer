@@ -63,6 +63,10 @@ CORS_ORIGINS=http://localhost:4200
 8. **RCA scope.** Never run root cause analysis on parameters already at ≥ accuracy target.
 9. **Canonical parameter names.** Never normalize, rename, or transform `parameter_name` values from the CSV.
 10. **Async graph execution.** Never use FastAPI `BackgroundTasks` for LangGraph graph runs — use `asyncio.create_task` with an async wrapper. BackgroundTasks runs in a thread pool and conflicts with async LangGraph.
+11. **System prompt is fixed.** The production system prompt (the master evaluation engine) never changes. Only the `description` field inside individual rule objects is optimised.
+12. **One call per conversation, not per rule.** The evaluator sends ONE LLM call per conversation containing ALL rules. The response is a JSON array — one result object per rule.
+13. **Dynamic metrics are ONE parameter record.** A dynamic metric (`rule_type="dynamic"`) is stored as a single `parameter_record` keyed by the original metric name, holding both `trigger_description` and `current_description` (answer). The evaluator internally expands it into `__trigger`/`__answer` items and combines results as Yes/No/NA. NA = trigger absent; Yes/No = trigger fired with different answer outcomes. Never split into separate `__trigger`/`__answer` records.
+14. **`description` is the only field being optimised.** Never modify `speaker`, `id`, `evaluation_type`, `n_messages`, or `rule_type`. For dynamic rules, both `trigger_description` and `current_description` are optimised; all other fields are fixed.
 
 ---
 

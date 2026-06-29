@@ -55,7 +55,7 @@ The AutoQA Prompt Optimizer is a **LangGraph agentic pipeline** wrapped in a Fas
 | `ambiguity_detection` | `awaiting_clarification` | Sends each description to an LLM classifier; generates ≤2 targeted questions per ambiguous rule; calls `interrupt()` to pause the graph for initial pre-loop clarification |
 | `baseline_prompt_generator` | `generating_baselines` | Normalises every rule description to structured format before the first evaluation. Three modes: **generate** (no description), **rewrite** (clarification answers exist), **format** (plain text → structured without changing criteria). Already-structured descriptions are left unchanged. |
 | `evaluator` | `evaluating` | Sends ONE LLM call per conversation containing all **non-converged** rule descriptions; converged rules are excluded to prevent LLM non-determinism from regressing rules already at target. Parses the JSON response array into per-rule predictions. |
-| `benchmarking` | `benchmarking` | Computes accuracy / precision / recall / F1 per rule; applies regression guard (reverts description if worse than best); marks rules `converged` or `optimizing` |
+| `benchmarking` | `benchmarking` | Computes accuracy / precision / recall / F1 per rule against original ground truth (Yes/No/NA). Dynamic metrics: predictions already combined by evaluator; no separate trigger gating needed. Applies regression guard (reverts description(s) if worse than best); marks rules `converged` or `optimizing` |
 | `router` (conditional edge) | — | Routes to `finalize` if all rules converged or `max_iterations` reached; otherwise routes to `rca_analyzer` |
 | `rca_analyzer` | `analyzing_failures` | Collects FP/FN cases with full transcripts; calls LLM to identify root cause in the description; stores findings in `parameter_records` |
 | `mid_loop_clarification` | `awaiting_clarification` | After RCA, checks each stagnant below-target rule for description ambiguity a domain expert could resolve. Calls `interrupt()` only when: (1) the rule is stagnant (≥3 consecutive identical accuracy values), (2) RCA indicates genuine description ambiguity, and (3) the rule has not been mid-loop clarified before. Pass-through (`return {}`) otherwise — no interrupt, no delay. |
@@ -143,12 +143,14 @@ OptimizationState {
 ```
 ParameterRecord {
   rule_id                  string
-  rule_type                "trigger" | "answer"
+  rule_type                "trigger" | "answer" | "dynamic"
   speaker                  "agent" | "customer"
+  trigger_speaker          "agent" | "customer" | None   ← dynamic metrics only
+  trigger_description      string | None                 ← dynamic metrics: trigger condition wording
   evaluation_type          "entire" | "first" | "last"
   n_messages               int
-  current_description      string       ← the only field being optimized
-  current_predictions{}    {conv_id: "Yes"|"No"}
+  current_description      string       ← answer description (the field being optimized)
+  current_predictions{}    {conv_id: "Yes"|"No"|"NA"}   ← combined for dynamic, binary for others
   current_accuracy         float
   current_precision        float
   current_recall           float
@@ -161,7 +163,8 @@ ParameterRecord {
   initial_accuracy         float
   best_accuracy            float        ← regression guard anchor
   best_description         string       ← reverted to on regression
-  iteration_history[]      [{iteration, description, accuracy, precision, recall, f1}]
+  best_trigger_description string | None  ← dynamic: trigger description at best accuracy
+  iteration_history[]      [{iteration, description, trigger_description?, accuracy, precision, recall, f1}]
   rca_findings             string
   status                   "pending" | "optimizing" | "converged" | "max_iterations_reached"
   optimization_notes       string
@@ -175,6 +178,10 @@ Per iteration, for each conversation:
 
 conversation.transcript + rules[].current_description
     │
+    │  Dynamic metrics (rule_type="dynamic") are expanded inline:
+    │    metric_name  →  {id: "metric_name__trigger", description: trigger_description}
+    │                    {id: "metric_name__answer",  description: current_description}
+    │
     ▼
 System prompt (fixed evaluation engine — never modified)
 + Human message: conversation transcript + all rule objects as JSON array
@@ -183,13 +190,15 @@ System prompt (fixed evaluation engine — never modified)
 LLM (one call per conversation, all rules in one request)
     │
     ▼
-JSON response array: [{rule_id, isQualified|isAdhered, reasoning}]
+JSON response array: [{_id, isQualified, rationale}]
     │
-    ├─▶ trigger rules  →  isQualified: true/false
-    └─▶ answer rules   →  isAdhered: true/false
+    │  Dynamic metrics: combine trigger+answer results
+    │    trigger=false  →  combined = "NA"  (scenario absent)
+    │    trigger=true, answer=true  →  combined = "Yes"
+    │    trigger=true, answer=false →  combined = "No"
     │
     ▼
-parameter_records[rule_id].current_predictions[conv_id] = "Yes" | "No"
+parameter_records[rule_id].current_predictions[conv_id] = "Yes" | "No" | "NA"
 ```
 
 ### 5. Benchmarking Logic
@@ -198,11 +207,14 @@ parameter_records[rule_id].current_predictions[conv_id] = "Yes" | "No"
 For each non-converged rule:
 
 1. Compute metrics from current_predictions vs ground_truth_map
+   Dynamic metrics: predictions already Yes/No/NA (combined by evaluator); no gating needed.
+   Static rules: predictions are Yes/No; NA comes from ground truth only.
    (NA ground truths excluded from denominator)
 
 2. Regression guard:
    if new_accuracy < best_accuracy → revert current_description to best_description
-   else → update best_accuracy and best_description
+                                     (dynamic: also revert trigger_description to best_trigger_description)
+   else → update best_accuracy and best_description (+ best_trigger_description for dynamic)
 
 3. Convergence check:
    if new_accuracy >= accuracy_target → status = "converged" (locked forever)

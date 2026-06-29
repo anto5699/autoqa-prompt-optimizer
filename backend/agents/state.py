@@ -4,15 +4,20 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 class RuleRecord(TypedDict):
     rule_id: str
-    rule_type: Literal["trigger", "answer"]
+    rule_type: Literal["trigger", "answer", "dynamic"]
     speaker: str
     evaluation_type: Literal["entire", "first", "last"]
     n_messages: int
+
+    # Dynamic metrics store both descriptions; static/answer rules leave these None
+    trigger_description: Optional[str]
+    trigger_speaker: Optional[str]
 
     current_description: str
     iteration_history: List[Dict[str, Any]]
 
     current_predictions: Dict[str, str]
+    current_rationales: Dict[str, str]
     current_accuracy: float
     current_precision: float
     current_recall: float
@@ -30,6 +35,7 @@ class RuleRecord(TypedDict):
     initial_accuracy: Optional[float]
     best_accuracy: Optional[float]
     best_description: Optional[str]
+    best_trigger_description: Optional[str]
     original_description: Optional[str]
 
 

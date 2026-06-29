@@ -5,16 +5,20 @@ from agents.nodes.benchmarking import benchmarking
 
 
 def _record(description, predictions, *, initial_accuracy=None, best_accuracy=None,
-            best_description=None, status="optimizing", current_accuracy=0.0):
+            best_description=None, status="optimizing", current_accuracy=0.0,
+            rule_type="answer", trigger_description=None, trigger_speaker=None):
     return {
         "rule_id": "r1",
-        "rule_type": "answer",
+        "rule_type": rule_type,
         "speaker": "Agent",
+        "trigger_description": trigger_description,
+        "trigger_speaker": trigger_speaker,
         "evaluation_type": "entire",
         "n_messages": 0,
         "current_description": description,
         "iteration_history": [],
         "current_predictions": predictions,
+        "current_rationales": {},
         "current_accuracy": current_accuracy,
         "current_precision": 0.0,
         "current_recall": 0.0,
@@ -30,6 +34,8 @@ def _record(description, predictions, *, initial_accuracy=None, best_accuracy=No
         "initial_accuracy": initial_accuracy,
         "best_accuracy": best_accuracy,
         "best_description": best_description,
+        "best_trigger_description": None,
+        "original_description": description,
     }
 
 
@@ -140,81 +146,52 @@ def test_zero_best_accuracy_not_treated_as_none():
     assert r["best_description"] == "desc v2"  # 0.0 == 0.0, so update best to current
 
 
-# ── trigger-gating ────────────────────────────────────────────────────────────
+# ── dynamic metric (unified trigger+answer) ──────────────────────────────────
 
-def _trigger_record(predictions, *, status="optimizing", current_accuracy=0.0):
-    return {
-        "rule_id": "metric__trigger",
-        "rule_type": "trigger",
-        "speaker": "agent",
-        "evaluation_type": "entire",
-        "n_messages": 0,
-        "current_description": "trigger desc",
-        "iteration_history": [],
-        "current_predictions": predictions,
-        "current_accuracy": current_accuracy,
-        "current_precision": 0.0,
-        "current_recall": 0.0,
-        "current_f1": 0.0,
-        "true_positives": 0,
-        "false_positives": 0,
-        "true_negatives": 0,
-        "false_negatives": 0,
-        "not_applicable_count": 0,
-        "rca_findings": None,
-        "optimization_notes": None,
-        "status": status,
-        "initial_accuracy": None,
-        "best_accuracy": None,
-        "best_description": None,
-    }
-
-
-def test_trigger_gating_overrides_answer_pred_to_na():
-    # trigger pred=No for c3 → answer pred should be gated to "NA"
-    # c3 GT is NA in answer rule (out-of-scope conversation)
-    # Without gating: pred=Yes vs GT=NA → na_wrong
-    # With gating: pred=NA vs GT=NA → na_correct
-    trigger_preds = {"c1": "Yes", "c2": "Yes", "c3": "No"}
-    answer_preds  = {"c1": "Yes", "c2": "No",  "c3": "Yes"}
+def test_dynamic_metric_combined_accuracy():
+    # Combined predictions already computed by evaluator: Yes/No/NA
+    # GT uses original single-column values: Yes/No/NA
+    # c1: pred=Yes, GT=Yes → TP
+    # c2: pred=No,  GT=No  → TN
+    # c3: pred=NA,  GT=NA  → na_correct
+    # Accuracy: 3/3 = 1.0
+    preds = {"c1": "Yes", "c2": "No", "c3": "NA"}
     gt = {
-        "c1": {"metric__trigger": "Yes", "metric__answer": "Yes"},
-        "c2": {"metric__trigger": "Yes", "metric__answer": "No"},
-        "c3": {"metric__trigger": "No",  "metric__answer": "NA"},
+        "c1": {"metric": "Yes"},
+        "c2": {"metric": "No"},
+        "c3": {"metric": "NA"},
     }
-    trigger_rec = _trigger_record(trigger_preds)
-    answer_rec  = _record("answer desc", answer_preds, initial_accuracy=None)
-    answer_rec["rule_id"] = "metric__answer"
-    trigger_rec["rule_id"] = "metric__trigger"
+    record = _record(
+        "answer desc", preds,
+        rule_type="dynamic",
+        trigger_description="trigger desc",
+        trigger_speaker="customer",
+        initial_accuracy=None,
+    )
+    record["rule_id"] = "metric"
+    result = asyncio.run(benchmarking(_state({"metric": record}, gt, iteration=0, target=0.9)))
 
-    result = asyncio.run(benchmarking(_state(
-        {"metric__trigger": trigger_rec, "metric__answer": answer_rec},
-        gt, iteration=0, target=0.9
-    )))
-
-    r = result["parameter_records"]["metric__answer"]
-    # c1=TP, c2=TN, c3=na_correct (gated) → 3/3 = 1.0
+    r = result["parameter_records"]["metric"]
     assert r["current_accuracy"] == pytest.approx(1.0)
+    assert "metric" in result["parameters_meeting_target"]
 
 
-def test_non_answer_rule_not_gated():
-    preds = {"c1": "Yes", "c2": "No"}
-    gt = {"c1": {"r1": "Yes"}, "c2": {"r1": "No"}}
-    record = _record("desc", preds, initial_accuracy=None)
-    result = asyncio.run(benchmarking(_state({"r1": record}, gt, iteration=0)))
-    r = result["parameter_records"]["r1"]
-    assert r["current_accuracy"] == pytest.approx(1.0)
+def test_dynamic_metric_regression_reverts_both_descriptions():
+    # Best was 80% with "trigger v1" / "answer v1"
+    # Current iteration: 0% with "trigger v2" / "answer v2"
+    preds = {"c1": "No"}
+    gt = {"c1": {"metric": "Yes"}}  # FN → 0%
+    record = _record(
+        "answer v2", preds,
+        rule_type="dynamic",
+        trigger_description="trigger v2",
+        trigger_speaker="customer",
+        initial_accuracy=0.80, best_accuracy=0.80, best_description="answer v1",
+    )
+    record["rule_id"] = "metric"
+    record["best_trigger_description"] = "trigger v1"
 
-
-def test_trigger_gating_without_matching_trigger_record():
-    # __answer rule exists but no __trigger record → predictions unchanged
-    answer_preds = {"c1": "Yes", "c2": "No"}
-    gt = {
-        "c1": {"metric__answer": "Yes"},
-        "c2": {"metric__answer": "No"},
-    }
-    answer_rec = _record("answer desc", answer_preds, initial_accuracy=None)
-    answer_rec["rule_id"] = "metric__answer"
-    result = asyncio.run(benchmarking(_state({"metric__answer": answer_rec}, gt, iteration=0)))
-    r = result["parameter_records"]["metric__answer"]
-    assert r["current_accuracy"] == pytest.approx(1.0)
+    result = asyncio.run(benchmarking(_state({"metric": record}, gt, iteration=1)))
+    r = result["parameter_records"]["metric"]
+    assert r["current_description"] == "answer v1"
+    assert r["trigger_description"] == "trigger v1"

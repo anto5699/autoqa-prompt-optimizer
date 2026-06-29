@@ -53,12 +53,15 @@ async def csv_ingestion(state: OptimizationState) -> dict:
             rule_id=rule["rule_id"],
             rule_type=rule["rule_type"],
             speaker=rule["speaker"],
+            trigger_description=rule.get("trigger_description"),
+            trigger_speaker=rule.get("trigger_speaker"),
             evaluation_type=rule["evaluation_type"],
             n_messages=rule["n_messages"],
             current_description=rule["description"],
             original_description=rule["description"],
             iteration_history=[],
             current_predictions={},
+            current_rationales={},
             current_accuracy=0.0,
             current_precision=0.0,
             current_recall=0.0,
@@ -74,6 +77,7 @@ async def csv_ingestion(state: OptimizationState) -> dict:
             initial_accuracy=None,
             best_accuracy=None,
             best_description=None,
+            best_trigger_description=None,
         )
 
     logger.info(

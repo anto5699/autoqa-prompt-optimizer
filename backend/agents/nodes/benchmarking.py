@@ -7,27 +7,6 @@ from utils.session_store import session_store
 logger = logging.getLogger(__name__)
 
 
-def _apply_trigger_gating(
-    rule_id: str,
-    predictions: dict,
-    records: dict,
-) -> dict:
-    """For __answer rules, override prediction to 'NA' where the paired __trigger fired 'No'."""
-    if not rule_id.endswith("__answer"):
-        return predictions
-
-    trigger_id = rule_id[: -len("__answer")] + "__trigger"
-    trigger_record = records.get(trigger_id)
-    if trigger_record is None:
-        return predictions
-
-    trigger_preds = trigger_record.get("current_predictions", {})
-    gated = dict(predictions)
-    for conv_id, trigger_pred in trigger_preds.items():
-        if trigger_pred == "No":
-            gated[conv_id] = "NA"
-    return gated
-
 
 async def benchmarking(state: OptimizationState) -> dict:
     logger.info(
@@ -51,32 +30,38 @@ async def benchmarking(state: OptimizationState) -> dict:
             meeting_target.append(rule_id)
             continue
 
-        predictions = _apply_trigger_gating(rule_id, record["current_predictions"], records)
-        metrics = compute_metrics(predictions, ground_truth_map, rule_id)
+        metrics = compute_metrics(record["current_predictions"], ground_truth_map, rule_id)
         new_accuracy = metrics["accuracy"]
+        is_dynamic = record.get("rule_type") == "dynamic"
 
         # First pass: seed regression tracking
         if record.get("initial_accuracy") is None:
             initial_accuracy = new_accuracy
             best_accuracy = new_accuracy
             best_description = record["current_description"]
+            best_trigger_description = record.get("trigger_description")
         else:
             initial_accuracy = record["initial_accuracy"]
             best_accuracy = record["best_accuracy"] if record["best_accuracy"] is not None else record["initial_accuracy"]
             best_description = record["best_description"] if record["best_description"] is not None else record["current_description"]
+            best_trigger_description = record.get("best_trigger_description") or record.get("trigger_description")
 
-        # Regression guard: revert description if this iteration was worse than best
+        # Regression guard: revert description(s) if this iteration was worse than best
         if new_accuracy < best_accuracy and record.get("initial_accuracy") is not None:
             current_description = best_description
+            current_trigger_description = best_trigger_description
             logger.info(
                 "session=%s rule_id=%s regression detected (%.2f < %.2f) — reverting description",
                 state["session_id"], rule_id, new_accuracy, best_accuracy,
             )
         else:
             current_description = record["current_description"]
+            current_trigger_description = record.get("trigger_description")
             if new_accuracy >= best_accuracy:
                 best_accuracy = new_accuracy
                 best_description = record["current_description"]
+                if is_dynamic:
+                    best_trigger_description = record.get("trigger_description")
 
         history_entry = {
             "iteration": current_iteration,
@@ -86,10 +71,13 @@ async def benchmarking(state: OptimizationState) -> dict:
             "recall": metrics["recall"],
             "f1": metrics["f1"],
         }
+        if is_dynamic:
+            history_entry["trigger_description"] = record.get("trigger_description")
 
         updated_record = {
             **record,
             "current_description": current_description,
+            "trigger_description": current_trigger_description,
             "current_accuracy": new_accuracy,
             "current_precision": metrics["precision"],
             "current_recall": metrics["recall"],
@@ -102,6 +90,7 @@ async def benchmarking(state: OptimizationState) -> dict:
             "initial_accuracy": initial_accuracy,
             "best_accuracy": best_accuracy,
             "best_description": best_description,
+            "best_trigger_description": best_trigger_description,
             "iteration_history": [*record["iteration_history"], history_entry],
         }
 

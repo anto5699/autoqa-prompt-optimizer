@@ -35,10 +35,17 @@ async def _generate_optimization_summary(
 
     original = (record.get("original_description") or "(none)").strip()
 
+    is_dynamic = record.get("rule_type") == "dynamic"
+    dynamic_note = (
+        "\nNote: this is a dynamic metric with both a trigger condition (detects whether the scenario applies) "
+        "and an answer condition (evaluates agent adherence). Both were optimized.\n"
+        if is_dynamic else ""
+    )
     prompt = (
         f"Parameter: {rule_id}\n"
         f"Initial accuracy: {initial_acc:.0%}  →  Final accuracy: {final_acc:.0%}\n"
-        f"Accuracy across iterations: {trajectory}\n\n"
+        f"Accuracy across iterations: {trajectory}\n"
+        f"{dynamic_note}\n"
         f"Original user description:\n{original}\n\n"
         f"{desc_section}"
         "Write a 2–3 sentence plain-English summary for a non-technical QA manager explaining:\n"
@@ -147,8 +154,10 @@ async def finalize(state: OptimizationState) -> dict:
         final_acc = record["current_accuracy"]
         regressed = initial_acc is not None and final_acc < initial_acc
 
+        is_dynamic = record.get("rule_type") == "dynamic"
         parameters_report[rule_id] = {
             "status": record["status"],
+            "rule_type": record.get("rule_type", "answer"),
             "original_description": record.get("original_description") or "",
             "initial_prompt": initial_desc,
             "initial_accuracy": initial_acc,
@@ -164,6 +173,7 @@ async def finalize(state: OptimizationState) -> dict:
             },
             "not_applicable_count": record["not_applicable_count"],
             "final_prompt": record["current_description"],
+            **({"final_trigger_prompt": record.get("trigger_description")} if is_dynamic else {}),
             "optimization_notes": record.get("optimization_notes"),
             "iteration_history": record["iteration_history"] if converged else [
                 {"iteration": h["iteration"], "accuracy": h["accuracy"]}

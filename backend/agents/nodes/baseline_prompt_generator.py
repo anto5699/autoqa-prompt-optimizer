@@ -44,7 +44,13 @@ Format rules:
 - Adherence must be established from explicit verbal content in the transcript only — never from non-transcript actions (e.g., post-call system updates, CRM entries), implicit signals (e.g., agent hanging up), or behaviours that are not spoken in the conversation
 - Evaluation is binary: the agent either adhered or did not. Never introduce partial adherence, scoring, thresholds, or weighted criteria
 - Never add positional or time-bound constraints (e.g. "in the first 2 messages", "within N turns", "before the customer responds"). Message-window scoping is controlled by evaluation_type and n_messages, not the description
-- Your entire response must not exceed 800 tokens. Be concise — use 2-3 PASS_CRITERIA and 2 PASS/FAIL EXAMPLES only if needed to stay within the limit\
+- Your entire response must not exceed 800 tokens. Be concise — use 2-3 PASS_CRITERIA and 2 PASS/FAIL EXAMPLES only if needed to stay within the limit
+
+Generalisation rules:
+- Write criteria that generalise to conversations not in this sample. Never anchor PASS_CRITERIA to a specific phrase, sentence, or pattern you observe in the failure examples
+- The RCA failure examples are evidence of a failure pattern — write criteria that address the underlying observable behaviour, not the surface form of those specific transcripts
+- EXAMPLES in your output must be representative illustrative utterances you compose yourself; do not copy or closely paraphrase verbatim transcript content from the failure examples
+- After writing each criterion, apply this mental test: "Would this criterion produce the same verdict on a conversation I have not seen, if the same underlying behaviour is present?" If the answer depends on a specific phrase from the failure examples, reframe it in terms of the behaviour\
 """
 
 
@@ -71,36 +77,64 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
 
     semaphore = asyncio.Semaphore(settings.max_concurrent_llm_calls)
 
-    async def _process_rule(rule_id: str, record: dict) -> tuple[str, dict | None, str | None]:
-        has_description = bool(record["current_description"].strip())
-        rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
+    async def _generate_description(record_for_gen: dict, rule_answers: dict) -> str:
+        has_desc = bool(record_for_gen["current_description"].strip())
         has_clarifications = bool(rule_answers)
-
-        if not has_description:
+        if not has_desc:
             mode = "generate"
         elif has_clarifications:
             mode = "rewrite"
-        elif not _is_structured(record["current_description"]):
+        elif not _is_structured(record_for_gen["current_description"]):
             mode = "format"
         else:
-            return rule_id, None, None
-
-        task = _build_generation_task(record, rule_answers if mode in ("generate", "rewrite") else {}, mode=mode)
+            return record_for_gen["current_description"]
+        task = _build_generation_task(record_for_gen, rule_answers if mode in ("generate", "rewrite") else {}, mode=mode)
         async with semaphore:
             response = await llm.ainvoke([
                 SystemMessage(content=_SYSTEM),
                 HumanMessage(content=task),
             ])
-        new_description = response.content.strip()
-        log_msg = {
-            "generate": f"Generated baseline description for {rule_id}",
-            "rewrite": f"Rewrote description for {rule_id} using clarification answers",
-            "format": f"Converted {rule_id} description to structured format",
-        }[mode]
-        logger.info("session=%s mode=%s rule_id=%s", state["session_id"], mode, rule_id)
+        return response.content.strip()
+
+    async def _process_rule(rule_id: str, record: dict) -> tuple[str, dict | None, str | None]:
+        rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
+
+        if record.get("rule_type") == "dynamic":
+            trigger_record = {
+                **record,
+                "rule_type": "trigger",
+                "rule_id": f"{rule_id} (trigger)",
+                "current_description": record.get("trigger_description") or "",
+                "speaker": record.get("trigger_speaker") or "customer",
+            }
+            new_trigger = await _generate_description(trigger_record, rule_answers)
+            new_answer = await _generate_description(record, rule_answers)
+            changed = new_trigger != record.get("trigger_description") or new_answer != record["current_description"]
+            if not changed:
+                return rule_id, None, None
+            logger.info("session=%s mode=baseline_dynamic rule_id=%s", state["session_id"], rule_id)
+            return rule_id, {**record, "trigger_description": new_trigger, "current_description": new_answer}, f"Prepared baseline descriptions for {rule_id}"
+
+        new_description = await _generate_description(record, rule_answers)
+        if new_description == record["current_description"]:
+            return rule_id, None, None
+        log_msg = f"Prepared baseline description for {rule_id}"
+        logger.info("session=%s mode=baseline rule_id=%s", state["session_id"], rule_id)
         return rule_id, {**record, "current_description": new_description}, log_msg
 
-    tasks = [_process_rule(rule_id, record) for rule_id, record in records.items()]
+    total_rules = len(records)
+    session_store.update(state["session_id"], {"node_progress": {"node": "generating_baselines", "step": 0, "total": total_rules}})
+    completed = 0
+
+    async def _process_rule_and_track(rule_id: str, record: dict):
+        nonlocal completed
+        try:
+            return await _process_rule(rule_id, record)
+        finally:
+            completed += 1
+            session_store.set_node_progress(state["session_id"], "generating_baselines", completed, total_rules)
+
+    tasks = [_process_rule_and_track(rule_id, record) for rule_id, record in records.items()]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     log_messages = []

@@ -13,6 +13,7 @@ from api.schemas.session import (
     ContinueResponse,
     CreateSessionResponse,
     ErrorResponse,
+    NodeProgress,
     ParameterInfo,
     ParameterSummary,
     SessionStatusResponse,
@@ -145,28 +146,18 @@ async def submit_descriptions(session_id: str, body: SubmitDescriptionsRequest) 
                 expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
         else:  # dynamic
             trigger_desc = (config.trigger_description or "").strip()
-            trigger_id = f"{metric_name}__trigger"
-            answer_id = f"{metric_name}__answer"
             rules.append({
-                "rule_id": trigger_id,
-                "rule_type": "trigger",
-                "speaker": config.trigger_speaker or "customer",
-                "evaluation_type": "entire",
-                "n_messages": 0,
-                "description": trigger_desc,
-            })
-            rules.append({
-                "rule_id": answer_id,
-                "rule_type": "answer",
+                "rule_id": metric_name,
+                "rule_type": "dynamic",
                 "speaker": "agent",
+                "trigger_speaker": config.trigger_speaker or "customer",
                 "evaluation_type": "entire",
                 "n_messages": 0,
                 "description": answer_desc,
+                "trigger_description": trigger_desc,
             })
             for conv_id, metric_gts in original_gt_map.items():
-                original_gt = metric_gts.get(metric_name, "NA")
-                expanded_gt_map[conv_id][trigger_id] = "No" if original_gt == "NA" else "Yes"
-                expanded_gt_map[conv_id][answer_id] = original_gt
+                expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
 
     initial_state: OptimizationState = {
         "session_id": session_id,
@@ -242,6 +233,9 @@ async def get_session(session_id: str) -> SessionStatusResponse:
         for name in session.get("_metric_names", [])
     ]
 
+    raw_np = session.get("node_progress")
+    node_progress = NodeProgress(**raw_np) if raw_np else None
+
     return SessionStatusResponse(
         session_id=session_id,
         current_phase=phase,
@@ -251,6 +245,7 @@ async def get_session(session_id: str) -> SessionStatusResponse:
         parameter_summary=parameter_summary,
         progress_log=progress,
         error_message=session.get("error"),
+        node_progress=node_progress,
     )
 
 
@@ -305,7 +300,8 @@ async def continue_session(session_id: str, body: ContinueRequest) -> ContinueRe
     session = session_store.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.get("current_phase") != "complete":
+    phase = session.get("current_phase")
+    if phase not in ("complete", "error"):
         raise HTTPException(status_code=409, detail="Session optimization is not complete yet")
 
     config = {"configurable": {"thread_id": session_id}}
@@ -316,6 +312,19 @@ async def continue_session(session_id: str, body: ContinueRequest) -> ContinueRe
         raise HTTPException(status_code=500, detail=f"Failed to read session state: {exc}") from exc
 
     below_target = live.get("parameters_below_target", [])
+
+    # In error state the router may never have run, so derive below_target from records directly.
+    if not below_target and phase == "error":
+        accuracy_target = live.get("accuracy_target", 0.90)
+        records = live.get("parameter_records", {})
+        if not records:
+            raise HTTPException(status_code=409, detail="No completed iterations to resume from")
+        below_target = [
+            rid for rid, rec in records.items()
+            if rec.get("current_accuracy", 0.0) < accuracy_target
+            and rec.get("status") != "converged"
+        ]
+
     if not below_target:
         raise HTTPException(status_code=409, detail="No unconverged parameters to continue")
 

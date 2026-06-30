@@ -1,0 +1,65 @@
+id: clarify-fallback-001
+description: "Stagnant rule with no clear LLM-detectable ambiguity; fallback open question must fire"
+node: mid_loop_clarification
+expect_interrupt: true
+
+rule:
+  rule_id: TransferProtocol
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Transfer Protocol
+    SPEAKER: Agent
+    ACTION: Follows proper transfer protocol when transferring customer to another department
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent names the department or team being transferred to
+    2. Agent gives the reason for the transfer
+    3. Agent obtains customer consent before transferring
+
+rca_findings: |
+  Stagnation detected. The description appears clear and specific.
+  No obvious ambiguity detected that a domain expert could resolve.
+  All three criteria are observable and concrete.
+  Errors may be due to edge cases in how consent is expressed (silence = consent?).
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.68, precision: 0.65, recall: 0.70, f1: 0.67}
+  - {iteration: 2, description: "...", accuracy: 0.67, precision: 0.64, recall: 0.70, f1: 0.67}
+  - {iteration: 3, description: "...", accuracy: 0.68, precision: 0.66, recall: 0.71, f1: 0.68}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "I'll transfer you to the billing team for the invoice query. Is that OK?"}
+      - {speaker: customer, msg: "Sure."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Transferring you to our technical support team now."}
+      - {speaker: customer, msg: "OK."}
+    ground_truth: "No"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: question_relevance
+      weight: 0.40
+      prompt: |
+        Rule: Transfer Protocol. RCA found no clear ambiguity — fallback question should be fired.
+        Clarification output: {output}
+        Is a question produced? Even a fallback open question ("Can you provide examples of what a correct transfer should look like?") counts. Score low only if nothing is output.
+    - id: non_redundancy
+      weight: 0.35
+      prompt: |
+        Clarification output: {output}
+        Is the question not simply repeating information already in the description (which already specifies name, reason, consent)?
+    - id: plain_language
+      weight: 0.25
+      prompt: |
+        Clarification output: {output}
+        Is the question understandable by a non-technical QA manager?
+  pass_threshold: 0.70

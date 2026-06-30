@@ -1,0 +1,85 @@
+id: opt-nochange-001
+description: "High-accuracy description (95%) passed to optimizer; must not regress correct cases"
+node: prompt_optimizer
+failure_mode: already_good
+rule_status: optimizing
+
+rule:
+  rule_id: TransferProtocol
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Transfer Protocol
+    SPEAKER: Agent
+    ACTION: Informs the customer about the transfer before executing it
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent states the name or department being transferred to
+    2. Agent confirms the customer's consent before initiating the transfer
+    3. Agent provides a brief reason for the transfer
+    EXAMPLES:
+    PASS:
+    1. "I'm going to transfer you to our billing team — they're best placed to resolve this. Is that OK with you?"
+    FAIL:
+    1. "Transferring you now." (no reason, no consent)
+
+rca_findings: |
+  Only 1 false positive in 20 conversations — accuracy 95%. No clear root cause.
+  The single error may be an edge case. Description is well-structured.
+  Recommendation: Minor clarification of "consent" to include implicit consent (no objection).
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "I'll transfer you to the technical team who can help with connectivity issues. Is that alright?"}
+      - {speaker: customer, msg: "Yes, please."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Our network team handles these. I'm going to connect you with them — they'll take it from here. OK?"}
+      - {speaker: customer, msg: "Sure."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: agent, msg: "Let me transfer you to billing."}
+      - {speaker: customer, msg: "OK."}
+    ground_truth: "No"
+    prediction: "No"
+
+correct_conversations:
+  - id: c4
+    transcript:
+      - {speaker: agent, msg: "I'm transferring you to our accounts team for the billing query — they can access your full account history. Is that OK?"}
+      - {speaker: customer, msg: "Yes."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: improvement_direction
+      weight: 0.25
+      prompt: |
+        Original description has 95% accuracy. Minor RCA only.
+        New description: {output}
+        Does the new description make at most a minor clarification and preserve the core criteria? Score low if the optimizer substantially rewrote a working description.
+    - id: functional_correctness
+      weight: 0.35
+      prompt: |
+        c1, c2, c4 are correct positives. c3 is a correct negative (no reason, no consent).
+        New description: {output}
+        Would an evaluator using this description still correctly classify all four conversations the same way?
+    - id: generalisation
+      weight: 0.25
+      prompt: |
+        New description: {output}
+        Does the description still generalise to transfer scenarios beyond these specific examples?
+    - id: format_compliance
+      weight: 0.15
+      prompt: |
+        New description: {output}
+        Follows structured format?
+  pass_threshold: 0.70

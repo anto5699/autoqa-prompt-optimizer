@@ -1,0 +1,103 @@
+id: e2e-multiRule-001
+description: "3 rules: AgentIntroduction converges quickly; ClosingGreeting (exact-phrase) is harder — locked rule must not be re-optimized"
+node: e2e
+
+e2e:
+  max_iterations: 8
+  accuracy_target: 0.80
+  expect_convergence: false
+  expect_locked_rules: [AgentIntroduction]
+
+rules:
+  - rule_id: AgentIntroduction
+    rule_type: answer
+    speaker: Agent
+    evaluation_type: first
+    n_messages: 4
+    description: |
+      METRIC_NAME: Agent Introduction
+      SPEAKER: Agent
+      ACTION: Introduces by name at start of call
+      PASS_LOGIC: ALL
+      PASS_CRITERIA:
+      1. Agent says their name in the first 4 messages
+      EXAMPLES:
+      PASS:
+      1. "Hi, I'm Alex."
+      FAIL:
+      1. "Hello, how can I help?"
+
+  - rule_id: ClosingGreeting
+    rule_type: answer
+    speaker: Agent
+    evaluation_type: entire
+    n_messages: -1
+    description: |
+      METRIC_NAME: Closing Greeting
+      SPEAKER: Agent
+      ACTION: Closes by inviting further questions
+      PASS_LOGIC: ALL
+      PASS_CRITERIA:
+      1. Agent says exactly "Is there anything else I can help you with today?"
+      EXAMPLES:
+      PASS:
+      1. "Is there anything else I can help you with today?"
+      FAIL:
+      1. "Goodbye." (no invitation)
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Hi I'm Alex. How can I help?"}
+      - {speaker: customer, msg: "I need to check my bill."}
+      - {speaker: agent,    msg: "Is there anything else I can help you with today?"}
+      - {speaker: customer, msg: "No thanks."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Welcome to support."}
+      - {speaker: customer, msg: "My internet is down."}
+      - {speaker: agent,    msg: "Anything else I can assist with?"}
+      - {speaker: customer, msg: "Nope."}
+    ground_truth:
+      AgentIntroduction: "No"
+      ClosingGreeting: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Thank you for calling, I'm Sam."}
+      - {speaker: customer, msg: "Hi Sam."}
+      - {speaker: agent,    msg: "Is there anything else I can help you with today?"}
+      - {speaker: customer, msg: "No, all good."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "Yes"
+  - id: c4
+    transcript:
+      - {speaker: agent,    msg: "Good morning, this is Riley. How can I help?"}
+      - {speaker: customer, msg: "Quick question about my plan."}
+      - {speaker: agent,    msg: "Happy to help with anything else?"}
+      - {speaker: customer, msg: "No, thanks."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "No"
+
+judge:
+  dimensions:
+    - id: convergence_achieved
+      weight: 0.50
+      prompt: |
+        E2E result (JSON): {output}
+        Did AgentIntroduction converge (status="converged") at any point? Check parameter_records.AgentIntroduction.status.
+    - id: iteration_efficiency
+      weight: 0.30
+      prompt: |
+        E2E result (JSON): {output}
+        Were both rules tracked independently with separate iteration histories? Check that parameter_records has entries for both AgentIntroduction and ClosingGreeting.
+    - id: locked_rules_respected
+      weight: 0.20
+      prompt: |
+        E2E result (JSON): {output}
+        Did the pipeline produce a final_report at termination (either convergence or max_iterations)?
+  pass_threshold: 0.70

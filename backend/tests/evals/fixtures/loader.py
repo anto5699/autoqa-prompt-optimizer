@@ -3,7 +3,7 @@ import yaml
 
 _SCENARIOS_DIR = Path(__file__).parent.parent / "scenarios"
 
-_REQUIRED_FIELDS = {"id", "description", "node", "rule", "conversations", "judge"}
+_REQUIRED_FIELDS = {"id", "description", "node", "conversations", "judge"}
 
 
 def load_scenarios(node_type: str) -> list[dict]:
@@ -26,5 +26,8 @@ def _validate(data: dict, path: Path) -> None:
     missing = _REQUIRED_FIELDS - set(data.keys())
     if missing:
         raise ValueError(f"{path.name}: missing required fields {missing}")
+    # Scenarios must define either a single rule or a rules list
+    if "rule" not in data and "rules" not in data:
+        raise ValueError(f"{path.name}: must define 'rule' (single) or 'rules' (list)")
     if not data.get("judge", {}).get("dimensions"):
         raise ValueError(f"{path.name}: judge.dimensions must be a non-empty list")

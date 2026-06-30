@@ -1,0 +1,65 @@
+id: align-scope-001
+description: "Description evaluates wrong speaker behaviour (criteria check Customer not Agent); audit must identify scope mismatch"
+node: gt_alignment_audit
+
+rule:
+  rule_id: CustomerSatisfaction
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Customer Satisfaction
+    SPEAKER: Agent
+    ACTION: Confirms customer satisfaction before ending the call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Customer explicitly states they are satisfied
+    2. Customer thanks the agent
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.63, precision: 0.58, recall: 0.68, f1: 0.63}
+  - {iteration: 2, description: "...", accuracy: 0.62, precision: 0.57, recall: 0.67, f1: 0.62}
+  - {iteration: 3, description: "...", accuracy: 0.63, precision: 0.59, recall: 0.68, f1: 0.63}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Is there anything else I can help you with? Were we able to resolve your issue today?"}
+      - {speaker: customer, msg: "You were great, thanks for your help."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Is everything sorted for you today? Happy with the outcome?"}
+      - {speaker: customer, msg: "I suppose so. Bye."}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent, msg: "Have a good day!"}
+      - {speaker: customer, msg: "Not really happy about the wait time, but thanks."}
+    ground_truth: "No"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: gap_identification
+      weight: 0.40
+      prompt: |
+        The rule has speaker=Agent but PASS_CRITERIA 1 and 2 check CUSTOMER behaviour ("customer states satisfied", "customer thanks agent"). This is a speaker scope mismatch.
+        c2 (agent asked confirming questions, GT=Yes, pred=No) shows the gap.
+        Audit output: {output}
+        Does the audit identify that the PASS_CRITERIA evaluate customer responses rather than agent actions, which is inconsistent with speaker=Agent?
+    - id: strategy_clarity
+      weight: 0.35
+      prompt: |
+        Audit output: {output}
+        Does the audit recommend rewriting PASS_CRITERIA to focus on AGENT actions (asking confirmation questions, inviting feedback) rather than CUSTOMER reactions?
+    - id: non_hallucination
+      weight: 0.25
+      prompt: |
+        c1 and c3 are correctly classified. Only c2 shows the scope gap.
+        Audit output: {output}
+        Does the audit avoid claiming there are additional problems not evidenced here?
+  pass_threshold: 0.70

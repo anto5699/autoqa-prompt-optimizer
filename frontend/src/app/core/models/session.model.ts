@@ -22,9 +22,12 @@ export interface ParameterInfo {
 
 export interface MetricConfig {
   type: 'static' | 'dynamic';
+  version?: 'v1' | 'v2';
   answer_description: string;
   trigger_description?: string;
   trigger_speaker?: 'agent' | 'customer';
+  evaluation_type?: 'entire' | 'first' | 'last';
+  n_messages?: number;
 }
 
 export interface ClarifyingQuestion {
@@ -47,6 +50,12 @@ export interface CreateSessionResponse {
   conversation_count: number;
 }
 
+export interface NodeProgress {
+  node: string;
+  step: number;
+  total: number;
+}
+
 export interface SessionStatus {
   session_id: string;
   current_phase: string;
@@ -56,6 +65,7 @@ export interface SessionStatus {
   parameter_summary: Record<string, ParameterSummary>;
   progress_log: string[];
   error_message?: string;
+  node_progress?: NodeProgress;
 }
 
 export interface ContinueResponse {

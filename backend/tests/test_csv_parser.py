@@ -104,24 +104,29 @@ def test_bad_ground_truth_raises():
         parse(to_csv_bytes(df))
 
 
-def test_empty_ground_truth_raises():
+def test_empty_ground_truth_normalises_to_na():
+    # Blank cells map to NA; all 10 rows become NA → metric excluded (< 5 evaluable)
     df = make_df(greeting_compliance=[""] * 10)
-    with pytest.raises(CSVParseError, match="greeting_compliance"):
-        parse(to_csv_bytes(df))
+    convs, metrics, gt_map, excluded, na_detected = parse(to_csv_bytes(df))
+    assert "greeting_compliance" in excluded
 
 
 # ── transcript validation ────────────────────────────────────────────────────────
 
-def test_invalid_transcript_json_raises():
+def test_invalid_transcript_json_wraps_as_plain_text():
     df = make_df(transcript=["not-json"] * 10)
-    with pytest.raises(CSVParseError, match="transcript"):
-        parse(to_csv_bytes(df))
+    convs, metrics, gt_map, excluded, na_detected = parse(to_csv_bytes(df))
+    assert isinstance(convs[0]["transcript"], list)
+    assert convs[0]["transcript"][0]["speaker"] == "conversation"
+    assert convs[0]["transcript"][0]["msg"] == "not-json"
 
 
-def test_transcript_non_list_raises():
-    df = make_df(transcript=[json.dumps({"msg": "hi"})] * 10)
-    with pytest.raises(CSVParseError, match="transcript"):
-        parse(to_csv_bytes(df))
+def test_transcript_non_list_wraps_as_plain_text():
+    raw = json.dumps({"msg": "hi"})
+    df = make_df(transcript=[raw] * 10)
+    convs, metrics, gt_map, excluded, na_detected = parse(to_csv_bytes(df))
+    assert isinstance(convs[0]["transcript"], list)
+    assert convs[0]["transcript"][0]["speaker"] == "conversation"
 
 
 # ── row count threshold ───────────────────────────────────────────────────────────

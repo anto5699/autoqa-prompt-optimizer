@@ -30,6 +30,11 @@ class SessionStore:
             if session_id in self._store:
                 self._store[session_id].setdefault("trace_log", []).append(entry)
 
+    def set_node_progress(self, session_id: str, node: str, step: int, total: int) -> None:
+        with self._lock:
+            if session_id in self._store:
+                self._store[session_id]["node_progress"] = {"node": node, "step": step, "total": total}
+
     def get_trace(self, session_id: str) -> list:
         with self._lock:
             session = self._store.get(session_id)

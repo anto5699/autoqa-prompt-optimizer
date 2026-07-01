@@ -5,7 +5,7 @@ import { Subscription, interval } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { SessionService } from '../../core/services/session.service';
 import { SseService } from '../../core/services/sse.service';
-import { ClarifyingQuestion } from '../../core/models/session.model';
+import { ClarifyingQuestion, NodeProgress } from '../../core/models/session.model';
 
 const PHASE_LABELS: Record<string, string> = {
   ingesting: 'Ingesting CSV',
@@ -115,7 +115,22 @@ const PIPELINE = [
               <span class="error-card-title">Optimization failed</span>
             </div>
             <p class="error-card-body">{{ error || 'An unexpected error occurred. Check your API key and model configuration, then try again.' }}</p>
-            <button class="btn-start-over" (click)="startOver()">← Start Over</button>
+            <div class="error-actions">
+              <button *ngIf="hasResumableData" class="btn-resume" (click)="resumeOptimization()" [disabled]="resuming">
+                ↺ {{ resuming ? 'Resuming…' : 'Resume (5 more iterations)' }}
+              </button>
+              <button class="btn-start-over" (click)="startOver()">← Start Over</button>
+            </div>
+          </div>
+
+          <div *ngIf="nodeProgress && nodeProgress.total > 1" class="node-progress-card">
+            <div class="node-progress-row">
+              <span class="node-progress-label">{{ nodeProgress.step }} / {{ nodeProgress.total }} processed</span>
+              <span class="node-progress-pct">{{ nodeProgressPct }}%</span>
+            </div>
+            <div class="node-progress-track">
+              <div class="node-progress-fill" [style.width.%]="nodeProgressPct"></div>
+            </div>
           </div>
 
           <div class="log-box" #logBox>
@@ -165,6 +180,8 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   params: { rule_id: string; accuracy: number; status: string; rca_findings?: string }[] = [];
   iteration = 0;
   error = '';
+  resuming = false;
+  nodeProgress: NodeProgress | null = null;
   pipeline = PIPELINE;
   clarifyingQuestions: ClarifyingQuestion[] = [];
   pendingAnswers: Record<string, string> = {};
@@ -185,6 +202,11 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   get phaseLabel(): string { return PHASE_LABELS[this.phase] ?? this.phase.replace(/_/g, ' '); }
   get isActive(): boolean  { return !['complete', 'error'].includes(this.phase); }
+
+  get nodeProgressPct(): number {
+    if (!this.nodeProgress || this.nodeProgress.total === 0) return 0;
+    return Math.round((this.nodeProgress.step / this.nodeProgress.total) * 100);
+  }
 
   isNodeDone(key: string): boolean {
     const nodeLv = PHASE_LEVEL[key] ?? 0;
@@ -213,6 +235,8 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
               this.phase = evt.data['phase'] as string;
             }
             if (evt.data['message']) { this.log.push(evt.data['message'] as string); this.shouldScroll = true; }
+            const np = evt.data['node_progress'] as NodeProgress | null;
+            if (np) this.nodeProgress = np;
           }
           if (evt.type === 'complete') this.router.navigate([`/results/${this.sessionId}`]);
           if (evt.type === 'error') this.error = evt.data['message'] as string;
@@ -229,6 +253,7 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.params = Object.entries(s.parameter_summary).map(([rule_id, v]) => ({
             rule_id, accuracy: v.accuracy, status: v.status, rca_findings: v.rca_findings,
           }));
+          this.nodeProgress = s.node_progress ?? null;
           if (s.current_phase === 'awaiting_clarification' && !this.awaitingResume) {
             if (!this.clarifyingQuestions.length) {
               this.clarifyingQuestions = s.clarifying_questions ?? [];
@@ -285,6 +310,18 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   trackByQuestion = (_: number, q: ClarifyingQuestion) => q.question_id;
+
+  get hasResumableData(): boolean {
+    return this.params.some(p => p.accuracy > 0);
+  }
+
+  resumeOptimization(): void {
+    this.resuming = true;
+    this.svc.continueOptimization(this.sessionId, 5).subscribe({
+      next: res => this.router.navigate(['/progress', res.new_session_id]),
+      error: () => { this.resuming = false; },
+    });
+  }
 
   startOver() { this.router.navigate(['/upload']); }
 

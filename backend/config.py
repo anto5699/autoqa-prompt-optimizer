@@ -41,7 +41,7 @@ Only evaluate the messages belonging to the specified speaker. Respect evaluatio
 
 Respond with ONLY a valid JSON array — one object per rule — in this exact format:
 [
-  {"_id": "<rule_id>", "isQualified": true, "rationale": "<one sentence citing the exact words from the transcript that determined the verdict>"},
+  {"_id": "<rule_id>", "isQualified": true, "rationale": "<one sentence>"},
   ...
 ]
 

@@ -65,7 +65,7 @@ judge:
     - id: non_hallucination
       weight: 0.30
       prompt: |
-        Only c1 and c4 are FP; only c2 is FN. c3 is correctly predicted.
+        Only c1 and c4 are FP (pred=Yes, GT=No); only c2 is FN (pred=No, GT=Yes); c3 is correctly predicted.
         RCA output: {output}
-        Does the RCA only reference patterns visible in these conversations rather than inventing additional error types?
+        Does the RCA avoid inventing error types unrelated to these conversations? Score 1.0 if all claims are grounded in c1–c4 patterns. Score 0.7 if it generalises reasonably from those patterns (e.g. infers a rule about formulaic vs genuine empathy) without asserting errors not visible in any conversation. Score 0 if it discusses entirely unrelated error types or fabricates specific examples not present in c1–c4.
   pass_threshold: 0.70

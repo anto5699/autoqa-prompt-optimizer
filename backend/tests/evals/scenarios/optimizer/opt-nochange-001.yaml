@@ -69,9 +69,9 @@ judge:
     - id: functional_correctness
       weight: 0.35
       prompt: |
-        c1, c2, c4 are correct positives. c3 is a correct negative (no reason, no consent).
+        The original description correctly classified conversations using three criteria: (1) agent names the department/team, (2) agent confirms customer consent, (3) agent provides a reason for the transfer.
         New description: {output}
-        Would an evaluator using this description still correctly classify all four conversations the same way?
+        Do all three original pass criteria remain semantically intact in the new description? Score 1.0 if all three are preserved — unchanged criteria guarantee the same verdicts. Score 0 if any criterion was removed or fundamentally reworded to mean something different.
     - id: generalisation
       weight: 0.25
       prompt: |

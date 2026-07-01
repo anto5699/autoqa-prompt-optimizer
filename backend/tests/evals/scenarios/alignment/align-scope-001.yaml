@@ -47,19 +47,22 @@ judge:
     - id: gap_identification
       weight: 0.40
       prompt: |
-        The rule has speaker=Agent but PASS_CRITERIA 1 and 2 check CUSTOMER behaviour ("customer states satisfied", "customer thanks agent"). This is a speaker scope mismatch.
-        c2 (agent asked confirming questions, GT=Yes, pred=No) shows the gap.
+        The PASS_CRITERIA check CUSTOMER responses ("customer states satisfied", "customer thanks agent") even though speaker=Agent. c2 (agent asked confirming questions, GT=Yes, pred=No) shows this gap.
         Audit output: {output}
-        Does the audit identify that the PASS_CRITERIA evaluate customer responses rather than agent actions, which is inconsistent with speaker=Agent?
+        Does the audit identify any aspect of the customer-vs-agent scope issue? Score 1.0 if it explicitly flags that criteria evaluate customer behaviour rather than agent actions (speaker scope mismatch). Score 0.7 if it identifies that criteria check customer responses or customer-expressed satisfaction (even framed as "implicit vs explicit") without explicitly naming the speaker=Agent mismatch. Score 0 if it only discusses accuracy or labelling without any mention of customer/agent scope.
     - id: strategy_clarity
       weight: 0.35
       prompt: |
         Audit output: {output}
-        Does the audit recommend rewriting PASS_CRITERIA to focus on AGENT actions (asking confirmation questions, inviting feedback) rather than CUSTOMER reactions?
+        The correct strategy is to shift the criteria from evaluating CUSTOMER responses to evaluating AGENT behaviour (e.g. agent asks for confirmation, agent invites feedback, agent checks satisfaction).
+        Does the audit's optimization strategy recommend changing the criteria to measure what the AGENT does rather than what the CUSTOMER says or does? Score 1.0 if it explicitly recommends agent-action criteria. Score 0.7 if it recommends shifting from customer responses to agent behaviour, even without naming specific agent actions. Score 0 if it only discusses implicit vs explicit customer satisfaction without addressing the agent/customer scope flip.
     - id: non_hallucination
       weight: 0.25
       prompt: |
         c1 and c3 are correctly classified. Only c2 shows the scope gap.
-        Audit output: {output}
-        Does the audit avoid claiming there are additional problems not evidenced here?
+        The text below is the full audit output:
+        ---
+        {output}
+        ---
+        Does the audit above avoid claiming there are additional problems beyond what c1–c3 evidence? Score 1.0 if it only references the scope issue visible in c2. Score 0 if it invents unrelated problems not present in any conversation.
   pass_threshold: 0.70

@@ -33,26 +33,34 @@ _JUDGE_SYSTEM = (
 )
 
 
-async def _score_dimension(dim: dict, llm: BaseChatModel) -> DimensionScore:
+async def _score_dimension(dim: dict, llm: BaseChatModel, retries: int = 2) -> DimensionScore:
     prompt = (
         f"{dim['prompt']}\n\n"
         "Score 1.0 = fully meets criterion, 0.7 = mostly meets it, "
         "0.4 = partially meets it, 0.0 = does not meet it.\n"
         'Return JSON: {"score": float, "rationale": "string"}'
     )
-    resp = await llm.ainvoke([
-        SystemMessage(content=_JUDGE_SYSTEM),
-        HumanMessage(content=prompt),
-    ])
-    raw = resp.content.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    data = json.loads(raw)
-    return DimensionScore(
-        id=dim["id"],
-        score=float(data["score"]),
-        rationale=str(data.get("rationale", "")),
-    )
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            resp = await llm.ainvoke([
+                SystemMessage(content=_JUDGE_SYSTEM),
+                HumanMessage(content=prompt),
+            ])
+            raw = resp.content.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            data = json.loads(raw)
+            return DimensionScore(
+                id=dim["id"],
+                score=float(data["score"]),
+                rationale=str(data.get("rationale", "")),
+            )
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                await asyncio.sleep(2 ** attempt)
+    raise last_exc
 
 
 async def judge_output(

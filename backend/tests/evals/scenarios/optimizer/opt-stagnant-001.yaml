@@ -75,9 +75,9 @@ judge:
     - id: functional_correctness
       weight: 0.35
       prompt: |
-        c2: agent said "could you hold for a moment?" (asks permission, gives implicit reason) — GT=Yes but was pred=No.
+        c2: agent said "I'll need to check our system for that — could you hold for a moment?" This gives a reason AND asks permission.
         New description: {output}
-        Would an evaluator using this description classify c2 as "Yes"?
+        Does the new description include criteria that would pass c2? Score 1.0 if the description accepts a case where the agent states a reason AND asks permission (e.g. via ANY logic or a combined criterion). Score 0 if the description requires explicit permission AND explicit reason as separate ALL criteria without allowing the combined case to pass.
     - id: generalisation
       weight: 0.25
       prompt: |
@@ -87,5 +87,5 @@ judge:
       weight: 0.15
       prompt: |
         New description: {output}
-        Does it follow the structured format?
+        Does the description contain METRIC_NAME, SPEAKER, ACTION, PASS_LOGIC, numbered PASS_CRITERIA, and EXAMPLES sections? Score 1.0 if all present, 0.5 if EXAMPLES missing, 0 if core sections (METRIC_NAME, PASS_CRITERIA) are absent.
   pass_threshold: 0.70

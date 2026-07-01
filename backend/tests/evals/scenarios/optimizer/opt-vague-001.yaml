@@ -55,9 +55,9 @@ judge:
     - id: functional_correctness
       weight: 0.35
       prompt: |
-        c1: agent said "Yeah, sorry about that" (informal) — GT=No but pred=Yes. New description should catch this.
         New description: {output}
-        Would an evaluator using this description correctly classify c1 as "No" (agent used informal language)?
+        The failure case is an agent saying "Yeah, sorry about that" — informal/slang language.
+        Does the new description include at least one criterion that would flag slang, filler words, or informal language as a fail condition? Score 1.0 if yes, 0 if the criteria are still too vague to catch this case.
     - id: generalisation
       weight: 0.25
       prompt: |
@@ -67,5 +67,5 @@ judge:
       weight: 0.15
       prompt: |
         New description: {output}
-        Follows structured format?
+        Does the description above contain all required sections: METRIC_NAME, SPEAKER, ACTION, PASS_LOGIC, numbered PASS_CRITERIA, and EXAMPLES? Score 1.0 if all sections are present, 0.5 if EXAMPLES are missing but the rest are present, 0 if core sections (METRIC_NAME, PASS_CRITERIA) are absent.
   pass_threshold: 0.70

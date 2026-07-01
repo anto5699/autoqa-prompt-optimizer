@@ -58,9 +58,9 @@ judge:
     - id: functional_correctness
       weight: 0.35
       prompt: |
-        c1 (agent only asked name — GT=No, was wrongly pred=Yes) should now be classified No with the new description.
+        c1: agent only asked "What's your name?" — a single data point — GT=No (insufficient verification).
         New description: {output}
-        Would an evaluator using this description correctly classify c1 as "No" (not adhered)?
+        Does the new description explicitly require TWO or more pieces of identifying information? Score 1.0 if the criteria clearly require multiple distinct verification items. Score 0 if a single confirmation (name only) could still satisfy the criteria.
     - id: generalisation
       weight: 0.25
       prompt: |

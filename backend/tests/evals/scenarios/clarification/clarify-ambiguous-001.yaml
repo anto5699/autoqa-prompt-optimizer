@@ -56,11 +56,12 @@ judge:
     - id: non_redundancy
       weight: 0.35
       prompt: |
-        Clarification question(s): {output}
-        Is this a NEW question not already answerable from the existing description (which already says "empathy phrases such as...")?
+        The existing Empathy Expression description already states: "Agent uses empathy phrases such as 'I understand your frustration'" and "Agent acknowledges the difficulty of the customer's situation."
+        Generated question: {output}
+        Does the generated question above probe a boundary NOT already answered by those two criteria? Score 1.0 if it introduces a new distinction (e.g. scripted vs. personalised). Score 0 if it merely restates what those criteria already say.
     - id: plain_language
       weight: 0.25
       prompt: |
-        Clarification question(s): {output}
-        Is the question written in plain language a non-technical QA manager could understand, without jargon like "PASS_CRITERIA", "criterion", "description", "evaluation system"?
+        Generated question: {output}
+        Is the question above written in everyday language that a non-technical call centre supervisor can understand, without using internal system terms like PASS_CRITERIA, criterion, description, or evaluation system? Score 1.0 if yes, 0 if it contains technical jargon.
   pass_threshold: 0.70

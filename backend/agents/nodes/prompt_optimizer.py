@@ -54,6 +54,86 @@ Generalisation rules:
 """
 
 
+_SYSTEM_V2 = """You are an expert QA rule description optimiser for contact centre quality evaluation.
+You rewrite rule descriptions in V2 Unified Criteria format to improve LLM evaluation accuracy.
+
+OUTPUT FORMAT — always produce sections in this exact order:
+
+CONDITION: <Always. | trigger event | AND/OR list>
+EXPECTED BEHAVIOR:
+  - <observable action from evaluated speaker>
+  AND / OR / THEN
+  - <next item>
+PROHIBITED:
+  - <disallowed action>
+EXCEPTION: <None. | situation | list>
+
+SECTION RULES:
+- CONDITION: when the metric applies. "Always." for unconditional. Connectors: AND, OR. Any speaker.
+- EXPECTED BEHAVIOR: mandatory. Observable actions from the evaluated speaker only. Connectors: AND, OR, THEN.
+- PROHIBITED: optional — omit this section entirely if there are no prohibited actions. Implicit OR. Evaluated speaker only.
+- EXCEPTION: mandatory. Use "None." when there are none. Implicit OR. Any participant or system event.
+
+HARD CONSTRAINTS:
+- Observable actions only — never use: "professional", "appropriately", "effectively", "well", "sufficiently", "adequately"
+- Never reference internal tools, message identifiers, turn identifiers, or raw timestamps
+- No conditional programming logic (if X then Y else Z) — split into separate metrics instead
+- Never mix AND and OR within a single list (pick one connector per list)
+- Present tense, active voice, plain English. All statements end with a period.
+- Bullet ≤ 20 words; whole description ≤ 12 lines
+- CONDITION, EXPECTED BEHAVIOR, and EXCEPTION are all mandatory
+- PROHIBITED is optional; include only when a specific action must be explicitly forbidden
+- Never add positional constraints ("in the first N messages", "within N turns") — scope is fixed by rule config
+
+REFERENCE PATTERNS (use as style anchors):
+
+# Pattern A — Trigger and response
+CONDITION: Customer requests assistance.
+EXPECTED BEHAVIOR:
+  - Agent provides assistance.
+EXCEPTION: Customer disconnects before response.
+
+# Pattern B — Unconditional requirement
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent greets the customer.
+EXCEPTION: No agent messages exist.
+
+# Pattern C — Sequential workflow (THEN)
+CONDITION: Customer requests account information.
+EXPECTED BEHAVIOR:
+  - Agent verifies identity.
+  THEN
+  - Agent provides information.
+EXCEPTION:
+  - Customer refuses verification.
+
+# Pattern D — Alternatives (OR)
+CONDITION: Customer requests compensation.
+EXPECTED BEHAVIOR:
+  - Agent offers refund.
+  OR
+  - Agent offers replacement.
+  OR
+  - Agent escalates the issue.
+EXCEPTION: Customer disconnects before response.
+
+# Pattern E — Positive requirement with guardrails (PROHIBITED)
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent communicates courteously.
+PROHIBITED:
+  - Agent guarantees approval.
+  - Agent shares customer data.
+EXCEPTION: None.
+
+ANTI-PATTERNS (never produce these):
+- Subjective: "Agent is professional." → "Agent uses courteous language." (make it observable)
+- Mixed connectors: "Agent greets AND confirms name OR verifies ID" → pick one connector per list
+- Branching logic: "If customer agrees, agent refunds; otherwise escalates." → create separate metrics
+"""
+
+
 async def prompt_optimizer(state: OptimizationState) -> dict:
     logger.info(
         "session=%s phase=optimizing_prompts iteration=%d",
@@ -116,8 +196,9 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
 
         rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
 
-        if record.get("rule_type") == "dynamic":
-            # Optimize trigger and answer descriptions independently
+        is_dynamic_v1 = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
+        if is_dynamic_v1:
+            # Optimize trigger and answer descriptions independently (V1 dynamic only)
             trigger_record = {
                 **record,
                 "rule_type": "trigger",
@@ -136,6 +217,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
                 "optimization_notes": f"Optimised at iteration {iteration + 1}",
             }
         else:
+            # Single description optimisation: covers V1 static and all V2 records
             new_description = await _optimise_description(record, rule_answers, llm, session_id)
             records[rule_id] = {
                 **record,
@@ -179,9 +261,64 @@ def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     return (max(recent) - min(recent)) < 0.03
 
 
+async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str) -> str:
+    trajectory = _accuracy_trajectory(record)
+    stagnant = _is_stagnant(record)
+
+    if stagnant:
+        rewrite_instruction = (
+            "You MUST make a fundamentally different change — rewrite the CONDITION, EXPECTED BEHAVIOR, "
+            "or EXCEPTION from a completely different angle. Do NOT make small edits to the current wording."
+        )
+    else:
+        rewrite_instruction = (
+            "Rewrite the description in V2 Unified Criteria format to address the identified failure patterns. "
+            "Keep YES/NO/NA semantics intact — do not change CONDITION/EXCEPTION logic unless RCA explicitly requires it."
+        )
+
+    v2_constraints = (
+        "HARD CONSTRAINTS:\n"
+        "- Keep CONDITION, EXPECTED BEHAVIOR, EXCEPTION sections (all mandatory)\n"
+        "- EXPECTED BEHAVIOR must refer only to the evaluated speaker\n"
+        "- No positional constraints ('in first N messages', 'within N turns')\n"
+        "- No message/turn identifiers or timestamps\n"
+        "- No subjective language ('professional', 'appropriately', etc.)\n"
+        "- No mixed AND/OR in one list\n"
+        "- PROHIBITED section is optional — include only if a specific prohibition is warranted\n"
+    )
+
+    answers_block = ""
+    if user_answers:
+        answers_block = "\nUser clarifications:\n" + "\n".join(f"- {a}" for a in user_answers.values())
+
+    prompt = (
+        f"Rule ID: {record['rule_id']}\n"
+        f"Speaker: {record['speaker']} | Evaluation type: {record['evaluation_type']}\n\n"
+        f"Current description:\n{record['current_description']}\n\n"
+        f"Root cause analysis:\n{record.get('rca_findings', 'Not available')}\n"
+        f"{f'Accuracy trajectory: {trajectory}' if trajectory else ''}\n"
+        f"{answers_block}\n\n"
+        f"{v2_constraints}\n"
+        f"{rewrite_instruction}\n\n"
+        "Output ONLY the improved V2 Unified Criteria description. No explanation, no preamble."
+    )
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content=_SYSTEM_V2),
+            HumanMessage(content=prompt),
+        ])
+        return (response.content or "").strip() or record["current_description"]
+    except Exception:
+        return record["current_description"]
+
+
 async def _optimise_description(
     record: dict, user_answers: dict, llm: BaseChatModel, session_id: str
 ) -> str:
+    if record.get("version") == "v2":
+        return await _optimise_description_v2(record, user_answers, llm, session_id)
+    # V1 path continues unchanged below
     rule_type = record["rule_type"]
     clarifications = "\n".join(f"- {v}" for v in user_answers.values()) if user_answers else "None"
 

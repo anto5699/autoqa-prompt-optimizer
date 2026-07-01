@@ -1,0 +1,178 @@
+"""V2 agent evals for the evaluator node.
+
+Scenarios
+---------
+E-V2-1  Correct V2 verdict from isQualified: true
+E-V2-2  V2 system prompt is used; V1 system prompt is not
+E-V2-3  V2 justification field mapped to rationale (mocked LLM)
+"""
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from langchain_core.messages import AIMessage
+
+from agents.nodes.evaluator import evaluator
+from config import DEFAULT_SYSTEM_PROMPT_V2
+from tests.evals.fixtures.state_factory import build_state
+
+
+# ---------------------------------------------------------------------------
+# Shared fixture helpers
+# ---------------------------------------------------------------------------
+
+def _v2_greeting_rule(rule_id: str = "AgentGreetingV2") -> dict:
+    return {
+        "rule_id": rule_id,
+        "version": "v2",
+        "rule_type": "answer",
+        "speaker": "Agent",
+        "evaluation_type": "entire",
+        "n_messages": -1,
+        "description": "CONDITION: Always.\nEXPECTED BEHAVIOR:\n  - Agent greets the customer.\nEXCEPTION: None.",
+    }
+
+
+def _v1_greeting_rule(rule_id: str = "AgentGreetingV1") -> dict:
+    return {
+        "rule_id": rule_id,
+        "version": "v1",
+        "rule_type": "answer",
+        "speaker": "Agent",
+        "evaluation_type": "entire",
+        "n_messages": -1,
+        "description": (
+            "METRIC_NAME: Agent Greeting\n"
+            "SPEAKER: Agent\n"
+            "ACTION: Greets the customer at the start of the call\n"
+            "PASS_LOGIC: ALL\n"
+            "PASS_CRITERIA:\n"
+            "1. Agent says hello or a greeting word in the first exchange\n"
+        ),
+    }
+
+
+def _greeting_conversation(conv_id: str = "c1") -> dict:
+    return {
+        "id": conv_id,
+        "transcript": [
+            {"speaker": "agent", "msg": "Good morning! Thank you for calling. How can I help you today?"},
+            {"speaker": "customer", "msg": "Hi, I have a billing question."},
+        ],
+        "ground_truth": "Yes",
+    }
+
+
+# ---------------------------------------------------------------------------
+# E-V2-1: Correct V2 verdict from a clearly greeting conversation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_e_v2_1_correct_verdict():
+    """Evaluator correctly returns 'Yes' for a V2 rule when agent clearly greets."""
+    scenario = {
+        "id": "e-v2-1",
+        "rule": _v2_greeting_rule(),
+        "conversations": [_greeting_conversation()],
+    }
+    state = build_state(scenario)
+    result = await evaluator(state)
+
+    records = result["parameter_records"]
+    rule_id = "AgentGreetingV2"
+    prediction = records[rule_id]["current_predictions"].get("c1")
+    rationale = records[rule_id]["current_rationales"].get("c1", "")
+
+    assert prediction == "Yes", (
+        f"[E-V2-1] Expected prediction='Yes' for clear greeting, got '{prediction}'"
+    )
+    assert len(rationale) > 0, (
+        "[E-V2-1] Expected non-empty rationale captured from justification field"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E-V2-2: V2 system prompt is used; V2 call uses V2 system prompt
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_e_v2_2_v2_system_prompt_used():
+    """Evaluator uses the V2 system prompt for V2 rules."""
+    scenario = {
+        "id": "e-v2-2",
+        "rule": _v2_greeting_rule(),
+        "conversations": [_greeting_conversation()],
+    }
+    state = build_state(scenario)
+
+    captured_system_prompts: list[str] = []
+
+    # Wrap ChatOpenAI.ainvoke to capture system prompt content
+    from langchain_openai import ChatOpenAI
+    original_ainvoke = ChatOpenAI.ainvoke
+
+    async def capturing_ainvoke(self, messages, **kwargs):
+        for msg in messages:
+            if hasattr(msg, "content") and isinstance(msg.content, str):
+                # SystemMessage will have content matching V1 or V2 prompt
+                if (
+                    msg.content.startswith("You are an AutoQA evaluation engine")
+                    or msg.content.startswith("You are a Business Rule Adherence Analyst")
+                ):
+                    captured_system_prompts.append(msg.content[:80])
+        return await original_ainvoke(self, messages, **kwargs)
+
+    with patch.object(ChatOpenAI, "ainvoke", capturing_ainvoke):
+        await evaluator(state)
+
+    assert any(
+        p.startswith("You are a Business Rule Adherence Analyst")
+        for p in captured_system_prompts
+    ), (
+        f"[E-V2-2] V2 system prompt was not used. Captured prompts: {captured_system_prompts}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E-V2-3: V2 justification field mapped to rationale (mocked LLM response)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_e_v2_3_justification_mapped_to_rationale():
+    """V2 LLM response justification is stored in current_rationales (mocked)."""
+    import json as _json
+
+    scenario = {
+        "id": "e-v2-3",
+        "rule": _v2_greeting_rule(),
+        "conversations": [_greeting_conversation()],
+    }
+    state = build_state(scenario)
+
+    long_justification = "A" * 600
+    mock_response = [
+        {
+            "_id": "AgentGreetingV2",
+            "isQualified": True,
+            "messageId": ["0"],
+            "speaker": "Agent",
+            "timestamp": [0],
+            "justification": long_justification,
+        }
+    ]
+    mock_content = _json.dumps(mock_response)
+
+    mock_ai_message = AIMessage(content=mock_content)
+
+    from langchain_openai import ChatOpenAI
+
+    with patch.object(ChatOpenAI, "ainvoke", new_callable=AsyncMock, return_value=mock_ai_message):
+        result = await evaluator(state)
+
+    records = result["parameter_records"]
+    rationale = records["AgentGreetingV2"]["current_rationales"].get("c1", "")
+
+    assert len(rationale) > 0, "[E-V2-3] Rationale should be non-empty after mapping justification"
+    assert len(rationale) <= 500, (
+        f"[E-V2-3] Rationale should be truncated to 500 chars, got {len(rationale)}"
+    )

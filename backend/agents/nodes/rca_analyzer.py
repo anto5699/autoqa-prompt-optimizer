@@ -13,7 +13,6 @@ _SYSTEM = (
     "You are an expert QA rule analyst. Analyse evaluation errors to identify root causes "
     "in the rule description that cause misclassification. Be specific and actionable."
 )
-_MAX_ERROR_CASES = 10
 _MAX_TRANSCRIPT_MESSAGES = 12
 
 
@@ -54,6 +53,7 @@ async def rca_analyzer(state: OptimizationState) -> dict:
             record.get("current_rationales", {}),
             ground_truth_map,
             conversations_by_id,
+            version=record.get("version", "v1"),
         )
         findings = await _run_rca(rule_id, record, error_cases, session_id, llm)
         records[rule_id] = {**record, "rca_findings": findings}
@@ -73,6 +73,7 @@ def _collect_error_cases(
     rationales: dict,
     ground_truth_map: dict,
     conversations_by_id: dict,
+    version: str = "v1",
 ) -> list[dict]:
     errors = []
     for conv_id, gt_by_rule in ground_truth_map.items():
@@ -82,12 +83,24 @@ def _collect_error_cases(
         pred = predictions.get(conv_id, "No")
         if pred != gt:
             conv = conversations_by_id.get(conv_id, {})
-            if pred == "Yes":
-                error_type = "false_positive"
-            elif pred == "NA":
-                error_type = "missed_trigger"
-            else:
-                error_type = "false_negative"
+            if version == "v1":
+                if pred == "NA" and gt != "NA":
+                    error_type = "missed_trigger"
+                elif pred == "Yes" and gt != "Yes":
+                    error_type = "false_positive"
+                elif pred == "No" and gt != "No":
+                    error_type = "false_negative"
+                else:
+                    continue
+            else:  # v2
+                if pred == "Yes" and gt != "Yes":
+                    error_type = "false_positive"
+                elif pred == "No" and gt != "No":
+                    error_type = "false_negative"
+                elif pred == "NA" and gt != "NA":
+                    error_type = "false_na_prediction"
+                else:
+                    continue
             errors.append({
                 "conversation_id": conv_id,
                 "ground_truth": gt,
@@ -96,8 +109,6 @@ def _collect_error_cases(
                 "transcript": conv.get("transcript", []),
                 "rationale": rationales.get(conv_id, ""),
             })
-            if len(errors) >= _MAX_ERROR_CASES:
-                break
     return errors
 
 
@@ -116,45 +127,66 @@ async def _run_rca(
     rule_id: str, record: dict, error_cases: list[dict], session_id: str, llm
 ) -> str:
     rule_type = record["rule_type"]
+    version = record.get("version", "v1")
 
-    if rule_type == "trigger":
-        error_labels = (
-            "False positive = LLM said trigger fired (isQualified: true) but GT=No.\n"
-            "False negative = LLM said trigger absent (isQualified: false) but GT=Yes."
+    if version == "v2":
+        rule_desc_block = (
+            f"Rule ID: {rule_id}\n"
+            f"Speaker: {record.get('speaker')}\n"
+            f"V2 Unified Criteria description:\n{record['current_description']}\n"
         )
+        description_section = rule_desc_block + "\n"
+        error_labels = {
+            "false_positive": "Predicted YES (adhered) but ground truth is NO — agent did not satisfy EXPECTED BEHAVIOR",
+            "false_negative": "Predicted NO (not adhered) but ground truth is YES — agent actually satisfied EXPECTED BEHAVIOR",
+            "false_na_prediction": "Predicted NA but ground truth is YES or NO — CONDITION or EXCEPTION mis-triggered",
+        }
+        error_labels_str = "\n".join(f"{k}: {v}" for k, v in error_labels.items())
         ask = (
-            "Identify what in the description causes misdetection: "
-            "is it ambiguous phrasing, too broad, too narrow, or scope mismatch?"
-        )
-        description_section = f"Current description:\n{record['current_description']}\n\n"
-    elif rule_type == "dynamic":
-        error_labels = (
-            "False positive = predicted Yes (adhered) but GT=No (not adhered).\n"
-            "False negative = predicted No (not adhered) but GT=Yes (adhered).\n"
-            "Missed trigger = predicted NA (scenario absent) but GT=Yes or GT=No (scenario was present)."
-        )
-        ask = (
-            "Identify whether the failure is in the trigger condition (failing to detect the scenario), "
-            "the answer condition (misclassifying adherence when scenario is present), or both. "
-            "Specify which description needs changing."
-        )
-        trigger_desc = record.get("trigger_description") or "(none)"
-        description_section = (
-            f"Trigger description (detects whether the scenario applies — speaker: {record.get('trigger_speaker', 'customer')}):\n"
-            f"{trigger_desc}\n\n"
-            f"Answer description (evaluates agent adherence when scenario is present — speaker: {record['speaker']}):\n"
-            f"{record['current_description']}\n\n"
+            "Frame fixes in terms of CONDITION (trigger accuracy), "
+            "EXPECTED BEHAVIOR (completeness and clarity of required action), "
+            "PROHIBITED (if over-triggering NO), and EXCEPTION (if over-triggering NA)."
         )
     else:
-        error_labels = (
-            "False positive = LLM said adhered but GT=No.\n"
-            "False negative = LLM said not adhered but GT=Yes."
-        )
-        ask = (
-            "Identify what in the description causes misclassification: "
-            "vague criteria, missing specificity, implicit knowledge required, or scope mismatch?"
-        )
-        description_section = f"Current description:\n{record['current_description']}\n\n"
+        error_labels_str = None  # set per rule_type below
+        if rule_type == "trigger":
+            error_labels_str = (
+                "False positive = LLM said trigger fired (isQualified: true) but GT=No.\n"
+                "False negative = LLM said trigger absent (isQualified: false) but GT=Yes."
+            )
+            ask = (
+                "Identify what in the description causes misdetection: "
+                "is it ambiguous phrasing, too broad, too narrow, or scope mismatch?"
+            )
+            description_section = f"Current description:\n{record['current_description']}\n\n"
+        elif rule_type == "dynamic":
+            error_labels_str = (
+                "False positive = predicted Yes (adhered) but GT=No (not adhered).\n"
+                "False negative = predicted No (not adhered) but GT=Yes (adhered).\n"
+                "Missed trigger = predicted NA (scenario absent) but GT=Yes or GT=No (scenario was present)."
+            )
+            ask = (
+                "Identify whether the failure is in the trigger condition (failing to detect the scenario), "
+                "the answer condition (misclassifying adherence when scenario is present), or both. "
+                "Specify which description needs changing."
+            )
+            trigger_desc = record.get("trigger_description") or "(none)"
+            description_section = (
+                f"Trigger description (detects whether the scenario applies — speaker: {record.get('trigger_speaker', 'customer')}):\n"
+                f"{trigger_desc}\n\n"
+                f"Answer description (evaluates agent adherence when scenario is present — speaker: {record['speaker']}):\n"
+                f"{record['current_description']}\n\n"
+            )
+        else:
+            error_labels_str = (
+                "False positive = LLM said adhered but GT=No.\n"
+                "False negative = LLM said not adhered but GT=Yes."
+            )
+            ask = (
+                "Identify what in the description causes misclassification: "
+                "vague criteria, missing specificity, implicit knowledge required, or scope mismatch?"
+            )
+            description_section = f"Current description:\n{record['current_description']}\n\n"
 
     cases_text = "\n\n".join(
         f"[{i+1}] Error type: {e['error_type']}\n"
@@ -176,7 +208,7 @@ async def _run_rca(
         f"Evaluation type: {record['evaluation_type']}\n\n"
         f"{description_section}"
         f"{trajectory_str}"
-        f"Error classification:\n{error_labels}\n\n"
+        f"Error classification:\n{error_labels_str}\n\n"
         f"Error cases ({len(error_cases)} shown):\n{cases_text}\n\n"
         "The evaluator's stated reason shows how the wording was interpreted. "
         "Treat it as evidence of the interpretation, not as a confirmed cause — "
@@ -187,7 +219,8 @@ async def _run_rca(
         "Why it's failing:\n"
         "• <specific pattern observed in the error cases above>\n"
         "• <second pattern, or omit if only one pattern>\n\n"
-        "What to improve: <one sentence on the specific change the wording needs>\n\n"
+        "What to improve: <one sentence on the specific change the wording needs — "
+        "where the error pattern is clear, name the exact criterion and state its replacement>\n\n"
         "Use everyday language. Do not use the terms 'false positive', 'false negative', 'LLM', "
         "'model', 'description', or 'criterion'. Instead say 'incorrectly marked as Yes', "
         "'incorrectly marked as No', 'the evaluation rule', 'the wording'."

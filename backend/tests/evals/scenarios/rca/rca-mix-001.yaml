@@ -1,0 +1,71 @@
+id: rca-mix-001
+description: "Ambiguous empathy rule produces both FP and FN; RCA must identify ambiguity as root cause"
+node: rca_analyzer
+failure_mode: ambiguous
+
+rule:
+  rule_id: EmpathyExpression
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Empathy Expression
+    SPEAKER: Agent
+    ACTION: Demonstrates empathy toward the customer's situation
+    PASS_LOGIC: ANY
+    PASS_CRITERIA:
+    1. Agent uses empathy phrases such as "I understand your frustration"
+    2. Agent acknowledges the difficulty of the customer's situation
+    EXAMPLES:
+    PASS:
+    1. "I completely understand how frustrating that must be."
+    FAIL:
+    1. "I'll transfer you now."
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "I'm really upset. This is the second outage this week."}
+      - {speaker: agent,    msg: "I hear you. That's definitely not the experience we want you to have. Let me check what's happening."}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "My grandmother is ill and I've been on hold for 45 minutes."}
+      - {speaker: agent,    msg: "I'm so sorry to hear that. Let me make sure we resolve this as quickly as possible for you."}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: customer, msg: "I've been a customer for 10 years and this is how you treat me."}
+      - {speaker: agent,    msg: "I completely understand your frustration and I sincerely apologise."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c4
+    transcript:
+      - {speaker: customer, msg: "This is unacceptable."}
+      - {speaker: agent,    msg: "I understand. Let me look into this for you."}
+    ground_truth: "No"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: root_cause_accuracy
+      weight: 0.40
+      prompt: |
+        Rule uses "empathy phrases" and "acknowledges difficulty." c1 (pred=Yes GT=No) and c4 (pred=Yes GT=No) are FPs; c2 (pred=No GT=Yes) is FN.
+        RCA output: {output}
+        Does the RCA identify that the description's criteria are ambiguous about what DEPTH of empathy qualifies — formulaic phrases vs genuine, personalised acknowledgment?
+    - id: actionability
+      weight: 0.30
+      prompt: |
+        RCA output: {output}
+        Does the RCA recommend clarifying the criteria with observable behavioural markers distinguishing surface empathy phrases from substantive acknowledgment?
+    - id: non_hallucination
+      weight: 0.30
+      prompt: |
+        Only c1 and c4 are FP (pred=Yes, GT=No); only c2 is FN (pred=No, GT=Yes); c3 is correctly predicted.
+        RCA output: {output}
+        Does the RCA avoid inventing error types unrelated to these conversations? Score 1.0 if all claims are grounded in c1–c4 patterns. Score 0.7 if it generalises reasonably from those patterns (e.g. infers a rule about formulaic vs genuine empathy) without asserting errors not visible in any conversation. Score 0 if it discusses entirely unrelated error types or fabricates specific examples not present in c1–c4.
+  pass_threshold: 0.70

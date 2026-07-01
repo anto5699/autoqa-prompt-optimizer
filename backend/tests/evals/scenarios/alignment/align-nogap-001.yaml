@@ -1,0 +1,69 @@
+id: align-nogap-001
+description: "Well-aligned description with no GT gaps; audit must not hallucinate problems"
+node: gt_alignment_audit
+
+rule:
+  rule_id: HoldAnnouncement
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Hold Announcement
+    SPEAKER: Agent
+    ACTION: Announces to the customer before placing them on hold
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent requests permission before placing customer on hold
+    2. Agent states the reason for the hold
+    EXAMPLES:
+    PASS:
+    1. "May I place you on a brief hold while I check our system?"
+    FAIL:
+    1. "Hold please." (no permission, no reason)
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.72, precision: 0.68, recall: 0.76, f1: 0.72}
+  - {iteration: 2, description: "...", accuracy: 0.73, precision: 0.70, recall: 0.76, f1: 0.73}
+  - {iteration: 3, description: "...", accuracy: 0.72, precision: 0.69, recall: 0.75, f1: 0.72}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Would you mind holding for a moment while I pull up your account?"}
+      - {speaker: customer, msg: "Sure."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Just a moment please. [places on hold]"}
+      - {speaker: customer, msg: "OK."}
+    ground_truth: "No"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent, msg: "Could I put you on hold briefly? I need to check with the technical team."}
+      - {speaker: customer, msg: "Go ahead."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: gap_identification
+      weight: 0.40
+      prompt: |
+        All three conversations are correctly classified: c1 and c3 are true positives, c2 is a true negative. There are no misclassifications.
+        Audit output: {output}
+        Does the audit correctly conclude there is no meaningful alignment gap? Score low if the audit invents a gap that doesn't exist.
+    - id: strategy_clarity
+      weight: 0.35
+      prompt: |
+        Audit output: {output}
+        If the audit found no gap, does it clearly state the description is well-aligned? Does it avoid recommending unnecessary changes?
+    - id: non_hallucination
+      weight: 0.25
+      prompt: |
+        No FP or FN exists in the conversations.
+        Audit output: {output}
+        Does the audit avoid fabricating misalignment patterns or recommending description changes that are not warranted?
+  pass_threshold: 0.70

@@ -54,6 +54,68 @@ Generalisation rules:
 """
 
 
+_SYSTEM_V2 = """You are an expert QA rule description writer for contact centre quality evaluation.
+Rule descriptions use the V2 Unified Criteria format evaluated by the Business Rule Adherence Analyst.
+
+You MUST output descriptions using this exact format, sections in this exact order:
+
+CONDITION: <Always. | trigger event | AND/OR list>
+EXPECTED BEHAVIOR:
+  - <observable action from evaluated speaker>
+  AND / OR / THEN
+  - <next item>
+PROHIBITED:
+  - <disallowed action>
+EXCEPTION: <None. | situation | list>
+
+SECTION RULES:
+- CONDITION: when the metric applies. "Always." for unconditional. Connectors: AND, OR. Any speaker.
+- EXPECTED BEHAVIOR: mandatory. Observable actions from the evaluated speaker only. Connectors: AND, OR, THEN. Never reference the other speaker.
+- PROHIBITED: optional — omit this section entirely if there are no prohibited actions. Implicit OR. Evaluated speaker only.
+- EXCEPTION: mandatory. Use "None." when there are none. Implicit OR. Any participant or system event.
+
+HARD CONSTRAINTS:
+- Observable actions only — never use: "professional", "appropriately", "effectively", "well", "sufficiently", "adequately"
+- Never reference internal tools, message identifiers, turn identifiers, or raw timestamps
+- No conditional programming logic (if X then Y else Z) — split into separate metrics instead
+- Never mix AND and OR within a single list (pick one connector per list)
+- Present tense, active voice, plain English. All statements end with a period.
+- Bullet ≤ 20 words; whole description ≤ 12 lines
+- CONDITION, EXPECTED BEHAVIOR, and EXCEPTION are all mandatory
+- PROHIBITED is optional; include only when a specific action must be explicitly forbidden
+
+REFERENCE PATTERNS:
+# Unconditional
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent greets the customer.
+EXCEPTION: No agent messages exist.
+
+# Sequential
+CONDITION: Customer requests account information.
+EXPECTED BEHAVIOR:
+  - Agent verifies identity.
+  THEN
+  - Agent provides information.
+EXCEPTION:
+  - Customer refuses verification.
+
+# With PROHIBITED
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent communicates courteously.
+PROHIBITED:
+  - Agent guarantees approval.
+  - Agent shares customer data.
+EXCEPTION: None.
+
+ANTI-PATTERNS (never produce these):
+- "Agent is professional." → write "Agent uses courteous language." (observable action)
+- Mixing AND and OR: "Agent greets AND confirms name OR verifies ID" → pick one connector
+- Branching: "If customer agrees, agent refunds; otherwise escalates." → split into two metrics
+"""
+
+
 async def prompt_optimizer(state: OptimizationState) -> dict:
     logger.info(
         "session=%s phase=optimizing_prompts iteration=%d",
@@ -105,19 +167,11 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
 
         session_store.append_log(session_id, f"Optimising description for {rule_id} (iteration {iteration + 1})…")
 
-        history_entry = {
-            "iteration": iteration,
-            "description": record["current_description"],
-            "accuracy": record["current_accuracy"],
-            "precision": record["current_precision"],
-            "recall": record["current_recall"],
-            "f1": record["current_f1"],
-        }
-
         rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
 
-        if record.get("rule_type") == "dynamic":
-            # Optimize trigger and answer descriptions independently
+        is_dynamic_v1 = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
+        if is_dynamic_v1:
+            # Optimize trigger and answer descriptions independently (V1 dynamic only)
             trigger_record = {
                 **record,
                 "rule_type": "trigger",
@@ -129,17 +183,16 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
             new_description = await _optimise_description(record, rule_answers, llm, session_id)
             records[rule_id] = {
                 **record,
-                "iteration_history": [*record["iteration_history"], history_entry],
                 "current_description": new_description,
                 "trigger_description": new_trigger_description,
                 "current_predictions": {},
                 "optimization_notes": f"Optimised at iteration {iteration + 1}",
             }
         else:
+            # Single description optimisation: covers V1 static and all V2 records
             new_description = await _optimise_description(record, rule_answers, llm, session_id)
             records[rule_id] = {
                 **record,
-                "iteration_history": [*record["iteration_history"], history_entry],
                 "current_description": new_description,
                 "current_predictions": {},
                 "optimization_notes": f"Optimised at iteration {iteration + 1}",
@@ -170,6 +223,14 @@ def _accuracy_trajectory(record: dict) -> str:
     return "Accuracy trajectory: " + " → ".join(f"{a:.0%}" for a in seen)
 
 
+def _is_high_accuracy(record: dict, threshold: float = 0.90) -> bool:
+    history = record.get("iteration_history", [])
+    if history:
+        return history[-1]["accuracy"] >= threshold
+    current = record.get("current_accuracy")
+    return current is not None and current >= threshold
+
+
 def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     history = record.get("iteration_history", [])
     if len(history) < min_entries:
@@ -179,9 +240,64 @@ def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     return (max(recent) - min(recent)) < 0.03
 
 
+async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str) -> str:
+    trajectory = _accuracy_trajectory(record)
+    stagnant = _is_stagnant(record)
+
+    if stagnant:
+        rewrite_instruction = (
+            "You MUST make a fundamentally different change — rewrite the CONDITION, EXPECTED BEHAVIOR, "
+            "or EXCEPTION from a completely different angle. Do NOT make small edits to the current wording."
+        )
+    else:
+        rewrite_instruction = (
+            "Rewrite the description in V2 Unified Criteria format to address the identified failure patterns. "
+            "Keep YES/NO/NA semantics intact — do not change CONDITION/EXCEPTION logic unless RCA explicitly requires it."
+        )
+
+    v2_constraints = (
+        "HARD CONSTRAINTS:\n"
+        "- Keep CONDITION, EXPECTED BEHAVIOR, EXCEPTION sections (all mandatory)\n"
+        "- EXPECTED BEHAVIOR must refer only to the evaluated speaker\n"
+        "- No positional constraints ('in first N messages', 'within N turns')\n"
+        "- No message/turn identifiers or timestamps\n"
+        "- No subjective language ('professional', 'appropriately', etc.)\n"
+        "- No mixed AND/OR in one list\n"
+        "- PROHIBITED section is optional — include only if a specific prohibition is warranted\n"
+    )
+
+    answers_block = ""
+    if user_answers:
+        answers_block = "\nUser clarifications:\n" + "\n".join(f"- {a}" for a in user_answers.values())
+
+    prompt = (
+        f"Rule ID: {record['rule_id']}\n"
+        f"Speaker: {record['speaker']} | Evaluation type: {record['evaluation_type']}\n\n"
+        f"Current description:\n{record['current_description']}\n\n"
+        f"Root cause analysis:\n{record.get('rca_findings', 'Not available')}\n"
+        f"{f'Accuracy trajectory: {trajectory}' if trajectory else ''}\n"
+        f"{answers_block}\n\n"
+        f"{v2_constraints}\n"
+        f"{rewrite_instruction}\n\n"
+        "Output ONLY the improved V2 Unified Criteria description. No explanation, no preamble."
+    )
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content=_SYSTEM_V2),
+            HumanMessage(content=prompt),
+        ])
+        return (response.content or "").strip() or record["current_description"]
+    except Exception:
+        return record["current_description"]
+
+
 async def _optimise_description(
     record: dict, user_answers: dict, llm: BaseChatModel, session_id: str
 ) -> str:
+    if record.get("version") == "v2":
+        return await _optimise_description_v2(record, user_answers, llm, session_id)
+    # V1 path continues unchanged below
     rule_type = record["rule_type"]
     clarifications = "\n".join(f"- {v}" for v in user_answers.values()) if user_answers else "None"
 
@@ -203,14 +319,30 @@ async def _optimise_description(
     trajectory = _accuracy_trajectory(record)
     trajectory_line = f"Accuracy history: {trajectory}\n\n" if trajectory else ""
 
-    if _is_stagnant(record):
+    if _is_high_accuracy(record):
+        rewrite_instruction = (
+            "IMPORTANT: This rule already achieves high accuracy (≥ 90%). The PASS_CRITERIA "
+            "text must remain WORD-FOR-WORD IDENTICAL to the current description — do not "
+            "rephrase, reorder, or modify any criterion. The ONLY permitted change is to add "
+            "or revise EXAMPLES to illustrate the one edge case identified in the RCA. If the "
+            "RCA finds no actionable change, output the full description unchanged in the "
+            "structured format."
+        )
+    elif _is_stagnant(record):
         rewrite_instruction = (
             "IMPORTANT: This rule has been STAGNANT — accuracy has not improved across multiple "
             "iterations. Incremental refinement is not working. You MUST make a fundamentally "
-            "different change: reconsider whether PASS_CRITERIA are measuring the right observable "
-            "signal, whether the ACTION statement should be reframed entirely, or whether the "
-            "EXAMPLES are representative. Do NOT make small edits to the existing description — "
-            "rewrite it from a different angle based on the error patterns."
+            "different structural change. "
+            "PROHIBITED: Switching PASS_LOGIC (ALL↔ANY) while keeping the same PASS_CRITERIA "
+            "items is NOT a structural change — do not do this alone, even if the RCA recommends it. "
+            "REQUIRED: Your output MUST differ from the current description in at least one "
+            "PASS_CRITERION item (the criterion text itself, not just the PASS_LOGIC value). "
+            "Choose at least one of: (a) replace individual criteria with ones that capture the "
+            "underlying behaviour rather than surface phrasing, (b) combine all criteria into a "
+            "single PASS_CRITERION that handles the full range of valid behaviours including "
+            "implicit and combined signals (reduce PASS_CRITERIA to one item), "
+            "(c) rewrite the ACTION verb to reframe what is being measured entirely. "
+            "Do NOT make small edits to existing criterion text — rewrite from a different angle."
         )
     else:
         rewrite_instruction = (
@@ -219,12 +351,21 @@ async def _optimise_description(
             "Add or revise EXAMPLES to reflect the failure cases."
         )
 
+    alignment_audit = record.get("alignment_audit")
+    alignment_block = (
+        f"Ground truth alignment audit (systemic gaps between the description logic and what "
+        f"ground truth actually rewards — use this to understand WHAT needs to change, not just HOW):\n"
+        f"{alignment_audit}\n\n"
+        if alignment_audit else ""
+    )
+
     prompt = (
         f"Rule ID: {record['rule_id']}\n"
         f"Rule type: {rule_type} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']} | n_messages: {record['n_messages']}\n\n"
         f"Current description:\n{record['current_description']}\n\n"
         f"Root cause analysis (use as evidence of failure patterns — write criteria that address the underlying behaviour, not the specific phrases or cases shown):\n{record.get('rca_findings', 'No findings available.')}\n\n"
+        f"{alignment_block}"
         f"{trajectory_line}"
         f"User clarifications:\n{clarifications}\n\n"
         f"Constraints: {constraints}\n\n"

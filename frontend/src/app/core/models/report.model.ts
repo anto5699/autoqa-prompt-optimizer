@@ -37,6 +37,7 @@ export interface ParameterReport {
   regression_warning?: { message: string };
   recommendations: string[];
   conversation_results: ConversationResult[];
+  version?: string;
 }
 
 export interface ReportSummary {

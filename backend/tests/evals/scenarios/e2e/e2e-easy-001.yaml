@@ -1,0 +1,74 @@
+id: e2e-easy-001
+description: "Single rule with minor, fixable error — pipeline must converge within 5 iterations"
+node: e2e
+
+e2e:
+  max_iterations: 6
+  accuracy_target: 0.80
+  expect_convergence: true
+  expect_locked_rules: []
+
+rule:
+  rule_id: AgentIntroduction
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: first
+  n_messages: 4
+  description: |
+    METRIC_NAME: Agent Introduction
+    SPEAKER: Agent
+    ACTION: Introduces themselves by name at the start of the call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent says their own name in the first 4 messages
+    EXAMPLES:
+    PASS:
+    1. "Hi, I'm Alex from customer support."
+    FAIL:
+    1. "Hello, how can I help you today?" (no name given)
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Thank you for calling. My name is Jordan. How can I help?"}
+      - {speaker: customer, msg: "Hi Jordan, I have a billing question."}
+    ground_truth: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Hello! How can I assist you today?"}
+      - {speaker: customer, msg: "I need to update my address."}
+    ground_truth: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Good afternoon, this is Sam speaking. What can I do for you?"}
+      - {speaker: customer, msg: "I'd like to cancel my subscription."}
+    ground_truth: "Yes"
+  - id: c4
+    transcript:
+      - {speaker: agent,    msg: "Welcome to support. How may I help?"}
+      - {speaker: customer, msg: "I have a technical issue."}
+    ground_truth: "No"
+  - id: c5
+    transcript:
+      - {speaker: agent,    msg: "Hi there, I'm Morgan. Thanks for calling today."}
+      - {speaker: customer, msg: "Hi Morgan."}
+    ground_truth: "Yes"
+
+judge:
+  dimensions:
+    - id: convergence_achieved
+      weight: 0.50
+      prompt: |
+        E2E result (JSON): {output}
+        Did the AgentIntroduction rule converge (status="converged") at any point during the run? Check the final status in parameter_records.AgentIntroduction.status.
+    - id: iteration_efficiency
+      weight: 0.30
+      prompt: |
+        E2E result (JSON): {output}
+        Did convergence happen within 5 iterations? Check current_iteration in the result. Score 1.0 for ≤3, 0.7 for 4-5, 0.3 for 6+.
+    - id: locked_rules_respected
+      weight: 0.20
+      prompt: |
+        E2E result (JSON): {output}
+        Did the pipeline terminate cleanly — either with optimization_complete=true or a final_report present?
+  pass_threshold: 0.70

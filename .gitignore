@@ -24,3 +24,19 @@ dist/
 test_strategized.csv
 test_strategized_v2.csv
 test.csv
+
+# Real customer data — never commit
+axis_transcripts.csv
+transcripts.csv
+Aptia*.csv
+Axis*.csv
+Axis*.tsv
+
+# Temporary data transfer artifacts
+*.gz.b64
+csvpart_*.txt
+descriptions_payload.json
+
+# Generated playwright output
+frontend/playwright-report/data/
+frontend/test-results/

@@ -5,6 +5,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 class RuleRecord(TypedDict):
     rule_id: str
     rule_type: Literal["trigger", "answer", "dynamic"]
+    version: Literal["v1", "v2"]
     speaker: str
     evaluation_type: Literal["entire", "first", "last"]
     n_messages: int
@@ -28,6 +29,8 @@ class RuleRecord(TypedDict):
     false_negatives: int
     not_applicable_count: int
     rca_findings: Optional[str]
+    alignment_audit: Optional[str]
+    audit_iteration: Optional[int]
     optimization_notes: Optional[str]
     status: Literal["pending", "optimizing", "converged", "max_iterations_reached"]
 
@@ -42,16 +45,18 @@ class RuleRecord(TypedDict):
 ParameterOptimizationRecord = RuleRecord
 
 
-class ClarifyingQuestion(TypedDict):
+class ClarifyingQuestion(TypedDict, total=False):
     question_id: str
     parameter_name: str
     question_text: str
     rationale: str
+    clarification_forced: bool  # True when forced as fallback; False/absent for LLM-generated
 
 
 class OptimizationState(TypedDict):
     session_id: str
     system_prompt: str
+    system_prompt_v2: str
     language: str
     llm_config: Dict[str, str]
 

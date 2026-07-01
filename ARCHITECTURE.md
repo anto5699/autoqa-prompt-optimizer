@@ -151,6 +151,7 @@ ParameterRecord {
   n_messages               int
   current_description      string       ← answer description (the field being optimized)
   current_predictions{}    {conv_id: "Yes"|"No"|"NA"}   ← combined for dynamic, binary for others
+  current_rationales{}     {conv_id: string}             ← evaluator's stated reasoning per conversation; truncated to 500 chars
   current_accuracy         float
   current_precision        float
   current_recall           float
@@ -233,13 +234,18 @@ Error cases (FP + FN predictions):
         ▼
     collect up to 10 misclassified conversations
     with full transcript (up to 12 messages each)
+    and evaluator rationale for each misclassification
         │
         ▼
     RCA LLM prompt:
       - current_description
       - accuracy trajectory (per-iteration history)
       - error classification labels (FP / FN definitions)
-      - error cases with full transcripts
+      - error cases with full transcripts and evaluator rationales
+        (the evaluator's stated reasoning is treated as evidence of
+         how the description was interpreted; RCA LLM is instructed
+         to cross-check rationales against the transcript rather
+         than accepting them as confirmed causes)
         │
         ▼
     rca_findings (3-5 sentence root cause)

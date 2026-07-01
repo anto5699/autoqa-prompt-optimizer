@@ -8,9 +8,12 @@ import { MetricConfig, ParameterInfo } from '../../core/models/session.model';
 
 interface MetricState {
   type: 'static' | 'dynamic';
+  version: 'v1' | 'v2';
   answerDescription: string;
   triggerDescription: string;
   triggerSpeaker: 'agent' | 'customer';
+  evaluationType: 'entire' | 'first' | 'last';
+  nMessages: number;
 }
 
 const POST_AMBIGUITY_PHASES = new Set([
@@ -38,57 +41,134 @@ const POST_AMBIGUITY_PHASES = new Set([
       <div *ngIf="error" class="error-msg">{{ error }}</div>
 
       <ng-container *ngIf="!waitingForAmbiguity">
+
+        <!-- Bulk toolbar — shown when one or more params are selected -->
+        <div class="bulk-toolbar" *ngIf="selectedParams.size > 0">
+          <span>{{ selectedParams.size }} selected</span>
+          <button type="button" class="bulk-btn" (click)="assignVersionToSelected('v1')">Assign → V1</button>
+          <button type="button" class="bulk-btn" (click)="assignVersionToSelected('v2')">Assign → V2</button>
+        </div>
+
         <div *ngFor="let param of parameters" class="param-card">
           <div class="param-header">
+            <input
+              type="checkbox"
+              class="param-checkbox"
+              [checked]="selectedParams.has(param.parameter_name)"
+              (change)="toggleParamSelection(param.parameter_name)">
             <span class="param-name">{{ param.parameter_name }}</span>
-            <div class="type-toggle">
+
+            <!-- V1 / V2 version toggle -->
+            <div class="version-toggle">
               <button
+                type="button"
+                class="toggle-btn"
+                [class.active]="metricStates[param.parameter_name]?.version === 'v1'"
+                (click)="metricStates[param.parameter_name].version = 'v1'">
+                V1
+              </button>
+              <button
+                type="button"
+                class="toggle-btn"
+                [class.active]="metricStates[param.parameter_name]?.version === 'v2'"
+                (click)="setVersionV2(param.parameter_name)">
+                V2
+              </button>
+            </div>
+
+            <!-- Static / Dynamic toggle — shown only for V1 -->
+            <div class="type-toggle" *ngIf="metricStates[param.parameter_name]?.version === 'v1'">
+              <button
+                type="button"
                 class="toggle-btn"
                 [class.active]="metricStates[param.parameter_name]?.type === 'static'"
                 (click)="setType(param.parameter_name, 'static')">
                 Static
               </button>
               <button
+                type="button"
                 class="toggle-btn"
                 [class.active]="metricStates[param.parameter_name]?.type === 'dynamic'"
                 (click)="setType(param.parameter_name, 'dynamic')">
                 Dynamic
               </button>
             </div>
-            <span *ngIf="param.has_na" class="na-badge">NA detected → Dynamic</span>
+            <span *ngIf="param.has_na && metricStates[param.parameter_name]?.version === 'v1'" class="na-badge">NA detected → Dynamic</span>
           </div>
 
           <ng-container *ngIf="metricStates[param.parameter_name] as ms">
-            <div *ngIf="ms.type === 'dynamic'" class="desc-field">
-              <div class="trigger-label-row">
-                <label>Trigger Description <span class="hint">— When does this scenario apply?</span></label>
-                <div class="speaker-toggle">
-                  <span class="speaker-label">Trigger speaker:</span>
-                  <button type="button" class="toggle-btn" [class.active]="ms.triggerSpeaker === 'customer'"
-                    (click)="ms.triggerSpeaker = 'customer'">Customer</button>
-                  <button type="button" class="toggle-btn" [class.active]="ms.triggerSpeaker === 'agent'"
-                    (click)="ms.triggerSpeaker = 'agent'">Agent</button>
+
+            <!-- V1 card body -->
+            <ng-container *ngIf="ms.version === 'v1'">
+              <div *ngIf="ms.type === 'dynamic'" class="desc-field">
+                <div class="trigger-label-row">
+                  <label>Trigger Description <span class="hint">— When does this scenario apply?</span></label>
+                  <div class="speaker-toggle">
+                    <span class="speaker-label">Trigger speaker:</span>
+                    <button type="button" class="toggle-btn" [class.active]="ms.triggerSpeaker === 'customer'"
+                      (click)="ms.triggerSpeaker = 'customer'">Customer</button>
+                    <button type="button" class="toggle-btn" [class.active]="ms.triggerSpeaker === 'agent'"
+                      (click)="ms.triggerSpeaker = 'agent'">Agent</button>
+                  </div>
+                </div>
+                <textarea
+                  [(ngModel)]="ms.triggerDescription"
+                  placeholder="Describe the condition that makes this metric applicable (e.g. 'The customer asked about billing')…"
+                  rows="2"
+                  [class.filled]="ms.triggerDescription?.trim()">
+                </textarea>
+                <div class="char-count">{{ (ms.triggerDescription || '').length }} chars</div>
+              </div>
+
+              <div class="desc-field">
+                <label>Answer Description <span class="hint">— What should the agent do?</span></label>
+                <textarea
+                  [(ngModel)]="ms.answerDescription"
+                  placeholder="Describe what the agent must say or do to pass this evaluation…"
+                  rows="2"
+                  maxlength="300"
+                  [class.filled]="ms.answerDescription?.trim()">
+                </textarea>
+                <div class="char-count">{{ (ms.answerDescription || '').length }}/300</div>
+              </div>
+            </ng-container>
+
+            <!-- V2 card body -->
+            <ng-container *ngIf="ms.version === 'v2'">
+              <div class="desc-field">
+                <label>Criteria Description</label>
+                <textarea
+                  [(ngModel)]="ms.answerDescription"
+                  placeholder="CONDITION: ...&#10;EXPECTED BEHAVIOR:&#10;  - ...&#10;EXCEPTION: ..."
+                  rows="8"
+                  maxlength="1000"
+                  [class.filled]="ms.answerDescription?.trim()">
+                </textarea>
+                <div class="char-count">{{ (ms.answerDescription || '').length }}/1000</div>
+              </div>
+
+              <div class="desc-field">
+                <label>Evaluation Scope</label>
+                <div class="scope-selector">
+                  <button
+                    type="button"
+                    *ngFor="let scope of scopeOptions"
+                    class="toggle-btn"
+                    [class.active]="ms.evaluationType === scope"
+                    (click)="ms.evaluationType = scope">
+                    {{ scope | titlecase }}
+                  </button>
+                  <input
+                    *ngIf="ms.evaluationType !== 'entire'"
+                    type="number"
+                    min="1"
+                    class="n-messages-input"
+                    [(ngModel)]="ms.nMessages"
+                    placeholder="N messages">
                 </div>
               </div>
-              <textarea
-                [(ngModel)]="ms.triggerDescription"
-                placeholder="Describe the condition that makes this metric applicable (e.g. 'The customer asked about billing')…"
-                rows="2"
-                [class.filled]="ms.triggerDescription?.trim()">
-              </textarea>
-              <div class="char-count">{{ (ms.triggerDescription || '').length }} chars</div>
-            </div>
+            </ng-container>
 
-            <div class="desc-field">
-              <label>Answer Description <span class="hint">— What should the agent do?</span></label>
-              <textarea
-                [(ngModel)]="ms.answerDescription"
-                placeholder="Describe what the agent must say or do to pass this evaluation…"
-                rows="2"
-                [class.filled]="ms.answerDescription?.trim()">
-              </textarea>
-              <div class="char-count">{{ (ms.answerDescription || '').length }} chars</div>
-            </div>
           </ng-container>
         </div>
 
@@ -120,6 +200,16 @@ const POST_AMBIGUITY_PHASES = new Set([
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .error-msg { color: #dc2626; font-size: 0.88rem; margin-bottom: 16px; }
+    .bulk-toolbar {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+      padding: 10px 16px; background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 8px; font-size: 0.85rem; color: #1d4ed8;
+    }
+    .bulk-btn {
+      padding: 5px 14px; font-size: 0.78rem; font-weight: 600;
+      background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer;
+    }
+    .bulk-btn:hover { background: #1e40af; }
     .param-card {
       background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
       padding: 20px 24px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
@@ -127,10 +217,12 @@ const POST_AMBIGUITY_PHASES = new Set([
     .param-header {
       display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;
     }
+    .param-checkbox { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
     .param-name {
       font-family: var(--mono); font-size: 0.88rem; font-weight: 600; color: #111827;
       background: #f3f4f6; padding: 3px 10px; border-radius: 4px; flex: 1;
     }
+    .version-toggle { display: flex; gap: 0; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
     .type-toggle { display: flex; gap: 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
     .toggle-btn {
       padding: 5px 14px; font-size: 0.78rem; font-weight: 600; border: none; cursor: pointer;
@@ -142,7 +234,7 @@ const POST_AMBIGUITY_PHASES = new Set([
       padding: 2px 8px; border-radius: 999px;
     }
     .desc-field { margin-bottom: 14px; }
-    .desc-field label { font-size: 0.82rem; font-weight: 600; color: #374151; }
+    .desc-field label { font-size: 0.82rem; font-weight: 600; color: #374151; display: block; margin-bottom: 6px; }
     .trigger-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 6px; }
     .speaker-toggle { display: flex; align-items: center; gap: 4px; }
     .speaker-label { font-size: 0.75rem; color: #9ca3af; margin-right: 2px; }
@@ -157,6 +249,13 @@ const POST_AMBIGUITY_PHASES = new Set([
     textarea:focus { border-color: var(--accent); }
     textarea.filled { border-color: #d1d5db; }
     .char-count { margin-top: 4px; text-align: right; font-size: 0.72rem; color: #9ca3af; }
+    .scope-selector { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    .scope-selector .toggle-btn { border: 1px solid #e5e7eb; }
+    .n-messages-input {
+      padding: 5px 10px; border: 1px solid #e5e7eb; border-radius: 6px;
+      font-size: 0.85rem; width: 110px; outline: none;
+    }
+    .n-messages-input:focus { border-color: var(--accent); }
     .footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
     .fill-status { font-size: 0.82rem; color: #9ca3af; }
     .fill-status.all-filled { color: #16a34a; }
@@ -171,6 +270,8 @@ const POST_AMBIGUITY_PHASES = new Set([
 export class DescriptionsComponent implements OnInit, OnDestroy {
   parameters: ParameterInfo[] = [];
   metricStates: Record<string, MetricState> = {};
+  selectedParams = new Set<string>();
+  readonly scopeOptions: Array<'entire' | 'first' | 'last'> = ['entire', 'first', 'last'];
   loading = true;
   submitting = false;
   waitingForAmbiguity = false;
@@ -195,9 +296,12 @@ export class DescriptionsComponent implements OnInit, OnDestroy {
         this.parameters.forEach(p => {
           this.metricStates[p.parameter_name] = {
             type: p.has_na ? 'dynamic' : 'static',
+            version: 'v1',
             answerDescription: '',
             triggerDescription: '',
             triggerSpeaker: 'customer',
+            evaluationType: 'entire',
+            nMessages: 0,
           };
         });
         this.loading = false;
@@ -217,10 +321,39 @@ export class DescriptionsComponent implements OnInit, OnDestroy {
     }
   }
 
+  setVersionV2(paramName: string) {
+    if (this.metricStates[paramName]) {
+      this.metricStates[paramName].version = 'v2';
+      this.metricStates[paramName].triggerDescription = '';
+    }
+  }
+
+  toggleParamSelection(paramName: string) {
+    if (this.selectedParams.has(paramName)) {
+      this.selectedParams.delete(paramName);
+    } else {
+      this.selectedParams.add(paramName);
+    }
+  }
+
+  assignVersionToSelected(version: 'v1' | 'v2') {
+    this.selectedParams.forEach(paramName => {
+      if (this.metricStates[paramName]) {
+        this.metricStates[paramName].version = version;
+        if (version === 'v2') {
+          this.metricStates[paramName].triggerDescription = '';
+        }
+      }
+    });
+    this.selectedParams.clear();
+  }
+
   get allFilled(): boolean {
     return this.parameters.every(p => {
       const ms = this.metricStates[p.parameter_name];
       if (!ms) return false;
+      if (ms.version === 'v2') return ms.answerDescription.trim().length > 0;
+      // V1 logic unchanged
       const answerFilled = ms.answerDescription.trim().length > 0;
       const triggerFilled = ms.type === 'static' || ms.triggerDescription.trim().length > 0;
       return answerFilled && triggerFilled;
@@ -231,6 +364,7 @@ export class DescriptionsComponent implements OnInit, OnDestroy {
     return this.parameters.filter(p => {
       const ms = this.metricStates[p.parameter_name];
       if (!ms) return false;
+      if (ms.version === 'v2') return ms.answerDescription.trim().length > 0;
       const answerFilled = ms.answerDescription.trim().length > 0;
       const triggerFilled = ms.type === 'static' || ms.triggerDescription.trim().length > 0;
       return answerFilled && triggerFilled;
@@ -244,14 +378,24 @@ export class DescriptionsComponent implements OnInit, OnDestroy {
     const descriptions: Record<string, MetricConfig> = {};
     this.parameters.forEach(p => {
       const ms = this.metricStates[p.parameter_name];
-      if (ms.type === 'static') {
+      if (ms.version === 'v2') {
         descriptions[p.parameter_name] = {
           type: 'static',
+          version: 'v2',
+          answer_description: ms.answerDescription.trim(),
+          evaluation_type: ms.evaluationType,
+          n_messages: ms.nMessages,
+        };
+      } else if (ms.type === 'static') {
+        descriptions[p.parameter_name] = {
+          type: 'static',
+          version: 'v1',
           answer_description: ms.answerDescription.trim(),
         };
       } else {
         descriptions[p.parameter_name] = {
           type: 'dynamic',
+          version: 'v1',
           answer_description: ms.answerDescription.trim(),
           trigger_description: ms.triggerDescription.trim(),
           trigger_speaker: ms.triggerSpeaker,

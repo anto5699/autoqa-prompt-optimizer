@@ -48,7 +48,7 @@ def _is_stagnant(record: dict) -> bool:
     if len(history) < _STAGNANT_MIN_ENTRIES:
         return False
     recent = [h["accuracy"] for h in history[-_STAGNANT_MIN_ENTRIES:]]
-    return len(set(recent)) == 1
+    return (max(recent) - min(recent)) < 0.03
 
 
 def _accuracy_trajectory(record: dict) -> str:
@@ -90,24 +90,43 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
         if len(questions) >= _MAX_QUESTIONS:
             break
         record = records.get(rule_id, {})
-        rca_findings = record.get("rca_findings", "")
-        if not rca_findings or rca_findings.startswith("RCA unavailable"):
-            continue
         if not _is_stagnant(record):
             continue
+        rca_findings = record.get("rca_findings", "")
         prior_questions = [
             q for q in state.get("clarifying_questions", [])
             if q["parameter_name"] == rule_id
         ]
-        question = await _maybe_generate_question(
-            rule_id, record, rca_findings, iteration, max_iterations, session_id,
-            state["system_prompt"], llm,
-            prior_questions=prior_questions,
-            prior_answers=existing_answers,
-        )
-        if question:
-            questions.append(question)
-            newly_clarified.append(rule_id)
+        question = None
+        if rca_findings and not rca_findings.startswith("RCA unavailable"):
+            question = await _maybe_generate_question(
+                rule_id, record, rca_findings, iteration, max_iterations, session_id,
+                state["system_prompt"], llm,
+                system_prompt_v2=state.get("system_prompt_v2", ""),
+                prior_questions=prior_questions,
+                prior_answers=existing_answers,
+            )
+        if not question:
+            # Fallback: rule is stagnant but the LLM found no specific ambiguity to resolve
+            # (or RCA findings were unavailable). Force an open question so a human can break
+            # the deadlock — incremental LLM rewrites have not been enough.
+            current_acc = record.get("current_accuracy", 0)
+            history_len = len(record.get("iteration_history", []))
+            question = ClarifyingQuestion(
+                question_id=str(uuid.uuid4()),
+                parameter_name=rule_id,
+                question_text=(
+                    f"This metric has been stuck around {current_acc:.0%} accuracy for "
+                    f"{history_len} iteration(s) despite multiple rewrites. "
+                    f"Can you describe a borderline situation — something your team regularly "
+                    f"debates — where it might not be obvious whether an agent should pass or "
+                    f"fail this check?"
+                ),
+                rationale="Forced fallback: rule remains stagnant; no specific ambiguity identified by LLM.",
+                clarification_forced=True,
+            )
+        questions.append(question)
+        newly_clarified.append(rule_id)
 
     if not questions:
         return {}
@@ -145,9 +164,12 @@ async def _maybe_generate_question(
     session_id: str,
     system_prompt: str,
     llm,
+    *,
+    system_prompt_v2: str = "",
     prior_questions: list | None = None,
     prior_answers: dict | None = None,
 ) -> ClarifyingQuestion | None:
+    active_system_prompt = system_prompt_v2 if record.get("version") == "v2" else system_prompt
     trajectory = _accuracy_trajectory(record)
     stagnancy_note = (
         f"  (stagnant — {_STAGNANT_MIN_ENTRIES}+ identical iterations)"
@@ -181,26 +203,39 @@ async def _maybe_generate_question(
                 "Your question must probe a different, unresolved aspect of the description.\n\n"
             )
 
+    trigger_block = ""
+    if record.get("rule_type") == "dynamic" and record.get("trigger_description"):
+        trigger_block = (
+            f"Trigger description (determines when this metric is in scope):\n"
+            f"{record.get('trigger_description', '')}\n\n"
+        )
+
     prompt = (
         f"Evaluation engine system prompt (defines how evaluation_type, n_messages, speaker are used):\n"
-        f"{system_prompt}\n\n"
+        f"{active_system_prompt}\n\n"
         f"---\n"
         f"Rule ID: {rule_id}\n"
         f"Rule type: {record.get('rule_type')} | Speaker: {record.get('speaker')}\n"
         f"Iteration: {iteration} of {max_iterations}\n\n"
         f"{trajectory_line}"
         f"{perf_line}"
-        f"\nCurrent description:\n{record.get('current_description', '')}\n\n"
+        f"\nCurrent description (answer — evaluates agent adherence):\n{record.get('current_description', '')}\n\n"
+        f"{trigger_block}"
         f"{prior_qa_block}"
         f"Root cause analysis:\n{rca_findings}\n\n"
         "This rule has been stagnant — accuracy has not improved despite multiple optimisation attempts. "
-        "Does the RCA indicate that the root cause is ambiguity in the rule description that a domain "
-        "expert's clarification could resolve? "
+        "Does the RCA indicate that the root cause is genuine ambiguity that a domain expert's answer could resolve?\n"
         "Respond with a JSON object only:\n"
         '{"needs_clarification": true/false, "question_text": "...", "rationale": "..."}\n'
-        "Set needs_clarification to true only if a specific user answer would meaningfully remove "
-        "the ambiguity and is not already answered above. Do NOT ask about evaluation_type, n_messages, "
-        "speaker, rule_type, or rule_id — these are explained in the system prompt above. "
+        "Rules for question_text:\n"
+        "- Must be a complete interrogative sentence ending with '?' — not a directive, not a statement.\n"
+        "- Must target the specific unresolved boundary from the RCA. "
+        "Example: 'When the customer says nothing after the agent proposes a transfer, does that count as consent?'\n"
+        "- Do not include the words 'PASS_CRITERIA', 'description', 'criterion', or any system prompt terminology.\n"
+        "- Do not restate criteria already explicit in the description.\n"
+        "Set needs_clarification to false if the ambiguity cannot be resolved by a domain expert answer "
+        "(e.g. it is caused by LLM capability limits or inherent transcript variation). "
+        "Do NOT ask about evaluation_type, n_messages, speaker, rule_type, or rule_id. "
         "If needs_clarification is false, question_text can be empty."
     )
 

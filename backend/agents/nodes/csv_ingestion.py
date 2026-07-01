@@ -52,6 +52,7 @@ async def csv_ingestion(state: OptimizationState) -> dict:
         parameter_records[rule["rule_id"]] = ParameterOptimizationRecord(
             rule_id=rule["rule_id"],
             rule_type=rule["rule_type"],
+            version=rule.get("version", "v1"),
             speaker=rule["speaker"],
             trigger_description=rule.get("trigger_description"),
             trigger_speaker=rule.get("trigger_speaker"),

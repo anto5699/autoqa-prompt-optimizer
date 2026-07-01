@@ -14,6 +14,7 @@ def _record(rule_id, *, status="optimizing", predictions=None):
         "current_description": "test description",
         "iteration_history": [],
         "current_predictions": predictions or {},
+        "current_rationales": {},
         "current_accuracy": 0.0,
         "current_precision": 0.0,
         "current_recall": 0.0,

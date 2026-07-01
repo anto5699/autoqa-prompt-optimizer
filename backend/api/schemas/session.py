@@ -10,9 +10,12 @@ class ParameterInfo(BaseModel):
 
 class MetricConfig(BaseModel):
     type: Literal["static", "dynamic"]
+    version: Literal["v1", "v2"] = "v1"
     answer_description: str
     trigger_description: Optional[str] = None
     trigger_speaker: Optional[Literal["agent", "customer"]] = "customer"
+    evaluation_type: Literal["entire", "first", "last"] = "entire"
+    n_messages: int = 0
 
 
 class CreateSessionResponse(BaseModel):
@@ -28,6 +31,12 @@ class ParameterSummary(BaseModel):
     rca_findings: Optional[str] = None
 
 
+class NodeProgress(BaseModel):
+    node: str
+    step: int
+    total: int
+
+
 class SessionStatusResponse(BaseModel):
     session_id: str
     current_phase: str
@@ -37,6 +46,7 @@ class SessionStatusResponse(BaseModel):
     parameter_summary: Dict[str, ParameterSummary] = Field(default_factory=dict)
     progress_log: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
+    node_progress: Optional[NodeProgress] = None
 
 
 class SubmitAnswersRequest(BaseModel):

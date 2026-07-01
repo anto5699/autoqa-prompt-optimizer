@@ -158,6 +158,7 @@ async def finalize(state: OptimizationState) -> dict:
         parameters_report[rule_id] = {
             "status": record["status"],
             "rule_type": record.get("rule_type", "answer"),
+            "version": record.get("version", "v1"),
             "original_description": record.get("original_description") or "",
             "initial_prompt": initial_desc,
             "initial_accuracy": initial_acc,

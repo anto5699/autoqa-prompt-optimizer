@@ -28,6 +28,7 @@ async def stream_session(session_id: str) -> StreamingResponse:
 
 async def _event_generator(session_id: str):
     log_cursor = 0
+    last_progress_step = -1
     config = {"configurable": {"thread_id": session_id}}
 
     while True:
@@ -48,6 +49,7 @@ async def _event_generator(session_id: str):
         store_phase = session.get("current_phase", "ingesting")
         live_phase = live.get("current_phase", "")
         phase = store_phase if store_phase else live_phase
+        node_progress = session.get("node_progress")
         live_log: list[str] = list(live.get("progress_log") or [])
         store_log: list[str] = list(session.get("progress_log") or [])
         # Prefer whichever source has more entries — session_store wins during active nodes
@@ -60,8 +62,21 @@ async def _event_generator(session_id: str):
                 "phase": phase,
                 "message": msg,
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "node_progress": node_progress,
             })
         log_cursor += len(new_messages)
+
+        # Heartbeat: emit when node_progress changes but no new log messages (evaluator runs silently)
+        if not new_messages and node_progress:
+            current_step = node_progress.get("step", -1)
+            if current_step != last_progress_step:
+                last_progress_step = current_step
+                yield _sse_event("progress", {
+                    "phase": phase,
+                    "message": None,
+                    "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                    "node_progress": node_progress,
+                })
 
         if phase == "complete" or live.get("optimization_complete"):
             yield _sse_event("complete", {"session_id": session_id})

@@ -1,0 +1,70 @@
+id: e2e-stagnant-001
+description: "Fundamentally misaligned description (criteria check customer behaviour, not agent) — alignment audit must fire to unblock"
+node: e2e
+
+e2e:
+  max_iterations: 10
+  accuracy_target: 0.80
+  expect_convergence: true
+  expect_locked_rules: []
+
+rule:
+  rule_id: CustomerSatisfaction
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Customer Satisfaction
+    SPEAKER: Agent
+    ACTION: Verifies customer satisfaction at end of call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Customer explicitly thanks the agent
+    2. Customer says they are satisfied with the resolution
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Is everything resolved for you today?"}
+      - {speaker: customer, msg: "Yes, all sorted. Thanks for your help."}
+    ground_truth: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Were we able to resolve your issue today?"}
+      - {speaker: customer, msg: "I suppose so."}
+    ground_truth: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Have a great day!"}
+      - {speaker: customer, msg: "Not really satisfied, but OK."}
+    ground_truth: "No"
+  - id: c4
+    transcript:
+      - {speaker: agent,    msg: "I hope we resolved this for you. Is there anything else?"}
+      - {speaker: customer, msg: "Yes, finally sorted. Bye."}
+    ground_truth: "Yes"
+  - id: c5
+    transcript:
+      - {speaker: agent,    msg: "Is there anything else?"}
+      - {speaker: customer, msg: "No. Wasn't happy with the wait but OK."}
+    ground_truth: "No"
+
+judge:
+  dimensions:
+    - id: convergence_achieved
+      weight: 0.50
+      prompt: |
+        E2E result (JSON): {output}
+        Did the pipeline eventually converge or reach max_iterations without crashing? Check optimization_complete or final_report presence. Score 1.0 if a final_report is present.
+    - id: iteration_efficiency
+      weight: 0.30
+      prompt: |
+        E2E result (JSON): {output}
+        Did the description improve across iterations? Check parameter_records.CustomerSatisfaction.iteration_history — is there accuracy variation across iterations, or did it stagnate? Score 1.0 if there is at least one iteration where accuracy improved.
+    - id: locked_rules_respected
+      weight: 0.20
+      prompt: |
+        E2E result (JSON): {output}
+        Did the pipeline terminate cleanly (final_report present and no Python exception visible in the output)?
+  pass_threshold: 0.70

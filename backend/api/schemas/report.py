@@ -28,6 +28,7 @@ class ConversationResult(BaseModel):
 
 class ParameterReport(BaseModel):
     status: str
+    version: Optional[str] = None
     original_description: Optional[str] = None
     initial_prompt: Optional[str] = None
     initial_accuracy: Optional[float] = None

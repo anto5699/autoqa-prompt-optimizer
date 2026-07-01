@@ -32,7 +32,7 @@ async def benchmarking(state: OptimizationState) -> dict:
 
         metrics = compute_metrics(record["current_predictions"], ground_truth_map, rule_id)
         new_accuracy = metrics["accuracy"]
-        is_dynamic = record.get("rule_type") == "dynamic"
+        is_dynamic = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
 
         # First pass: seed regression tracking
         if record.get("initial_accuracy") is None:

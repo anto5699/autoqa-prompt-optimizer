@@ -102,6 +102,7 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
         question = await _maybe_generate_question(
             rule_id, record, rca_findings, iteration, max_iterations, session_id,
             state["system_prompt"], llm,
+            system_prompt_v2=state.get("system_prompt_v2", ""),
             prior_questions=prior_questions,
             prior_answers=existing_answers,
         )
@@ -145,9 +146,12 @@ async def _maybe_generate_question(
     session_id: str,
     system_prompt: str,
     llm,
+    *,
+    system_prompt_v2: str = "",
     prior_questions: list | None = None,
     prior_answers: dict | None = None,
 ) -> ClarifyingQuestion | None:
+    active_system_prompt = system_prompt_v2 if record.get("version") == "v2" else system_prompt
     trajectory = _accuracy_trajectory(record)
     stagnancy_note = (
         f"  (stagnant — {_STAGNANT_MIN_ENTRIES}+ identical iterations)"
@@ -183,7 +187,7 @@ async def _maybe_generate_question(
 
     prompt = (
         f"Evaluation engine system prompt (defines how evaluation_type, n_messages, speaker are used):\n"
-        f"{system_prompt}\n\n"
+        f"{active_system_prompt}\n\n"
         f"---\n"
         f"Rule ID: {rule_id}\n"
         f"Rule type: {record.get('rule_type')} | Speaker: {record.get('speaker')}\n"

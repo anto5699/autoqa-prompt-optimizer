@@ -80,6 +80,9 @@ type FilterKey = 'all' | 'converged' | 'not-met';
         <div class="param-row" (click)="toggle(entry.key)">
           <code class="param-id">{{ entry.key }}</code>
           <span class="status-badge" [class]="entry.val.status">{{ statusLabel(entry.val.status) }}</span>
+          <span class="version-badge" [class.v2]="entry.val.version === 'v2'">
+            {{ entry.val.version?.toUpperCase() || 'V1' }}
+          </span>
           <div class="acc-journey">
             <ng-container *ngIf="entry.val.initial_accuracy != null">
               <span class="acc-val" [style.color]="accColor(entry.val.initial_accuracy, report.summary.accuracy_target)" style="font-size:0.85rem">
@@ -130,7 +133,10 @@ type FilterKey = 'all' | 'converged' | 'not-met';
                 <span class="prompt-acc-badge" [class.good]="entry.val.final_accuracy >= report!.summary.accuracy_target" [class.bad]="entry.val.final_accuracy < report!.summary.accuracy_target">{{ (entry.val.final_accuracy * 100).toFixed(1) }}% accuracy</span>
                 <button class="copy-btn" (click)="copy(entry.key, entry.val.final_prompt)">Copy</button>
               </div>
-              <pre class="prompt-box final">{{ entry.val.final_prompt }}</pre>
+              <pre *ngIf="entry.val.version === 'v2'; else regularPrompt" class="prompt-box final v2-description">{{ entry.val.final_prompt }}</pre>
+              <ng-template #regularPrompt>
+                <pre class="prompt-box final">{{ entry.val.final_prompt }}</pre>
+              </ng-template>
             </div>
           </div>
 
@@ -436,13 +442,20 @@ export class ResultsComponent implements OnInit {
 
   exportPromptsCsv() {
     if (!this.report) return;
-    const rows = ['parameter_name,rule_type,optimised_prompt'];
-    for (const [ruleId, param] of Object.entries(this.report.parameters)) {
-      const ruleType = ruleId.includes('_trigger_') ? 'trigger' : 'answer';
-      const safePrompt = (param.final_prompt ?? '').replace(/"/g, '""');
-      rows.push(`${ruleId},${ruleType},"${safePrompt}"`);
+    const rows = [['parameter_name', 'version', 'rule_type', 'optimised_prompt']];
+    for (const [ruleId, paramReport] of Object.entries(this.report.parameters)) {
+      const version = paramReport.version || 'v1';
+      const ruleType = version === 'v2' ? 'unified' : (ruleId.endsWith('__trigger') ? 'trigger' : 'answer');
+      const prompt = paramReport.final_prompt || '';
+      rows.push([ruleId, version, ruleType, prompt]);
     }
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const csvRows = [rows[0].join(',')];
+    for (let i = 1; i < rows.length; i++) {
+      const [id, ver, rt, prompt] = rows[i];
+      const safePrompt = prompt.replace(/"/g, '""');
+      csvRows.push(`${id},${ver},${rt},"${safePrompt}"`);
+    }
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

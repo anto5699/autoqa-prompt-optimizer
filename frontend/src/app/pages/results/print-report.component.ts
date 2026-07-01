@@ -98,6 +98,7 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           <thead>
             <tr>
               <th>Parameter</th>
+              <th>Version</th>
               <th>Initial Accuracy</th>
               <th>Final Accuracy</th>
               <th>Improvement</th>
@@ -109,6 +110,7 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           <tbody>
             <tr *ngFor="let e of allEntries">
               <td><code>{{ e.key }}</code></td>
+              <td>{{ e.val.version?.toUpperCase() || 'V1' }}</td>
               <td>{{ e.val.initial_accuracy != null ? pct(e.val.initial_accuracy) : '—' }}</td>
               <td [style.color]="accColor(e.val.final_accuracy, report.summary.accuracy_target)">{{ pct(e.val.final_accuracy) }}</td>
               <td [style.color]="e.val.initial_accuracy != null ? deltaColor(e.val.final_accuracy - e.val.initial_accuracy) : '#6b7280'">

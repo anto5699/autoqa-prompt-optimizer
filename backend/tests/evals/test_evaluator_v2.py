@@ -92,44 +92,62 @@ async def test_e_v2_1_correct_verdict():
 
 
 # ---------------------------------------------------------------------------
-# E-V2-2: V2 system prompt is used; V2 call uses V2 system prompt
+# E-V2-2: Mixed V1 + V2 scenario produces 2 LLM calls; V2 uses V2 system prompt
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_e_v2_2_v2_system_prompt_used():
-    """Evaluator uses the V2 system prompt for V2 rules."""
+async def test_e_v2_2_system_prompt_routing():
+    """Mixed V1+V2 scenario: evaluator makes 2 LLM calls; V2 call uses V2 system prompt, V1 does not."""
+    # Build state using the multi-rule path: pass both rules in scenario["rules"]
+    v1_rule = _v1_greeting_rule("AgentGreetingV1")
+    v2_rule = _v2_greeting_rule("AgentGreetingV2")
+    conv = _greeting_conversation("c1")
+
     scenario = {
         "id": "e-v2-2",
-        "rule": _v2_greeting_rule(),
-        "conversations": [_greeting_conversation()],
+        "rules": [v1_rule, v2_rule],
+        "conversations": [conv],
     }
     state = build_state(scenario)
 
-    captured_system_prompts: list[str] = []
+    calls: list[dict] = []
 
-    # Wrap ChatOpenAI.ainvoke to capture system prompt content
     from langchain_openai import ChatOpenAI
     original_ainvoke = ChatOpenAI.ainvoke
 
     async def capturing_ainvoke(self, messages, **kwargs):
+        call_info: dict = {"system_prompt": None}
         for msg in messages:
             if hasattr(msg, "content") and isinstance(msg.content, str):
-                # SystemMessage will have content matching V1 or V2 prompt
                 if (
                     msg.content.startswith("You are an AutoQA evaluation engine")
                     or msg.content.startswith("You are a Business Rule Adherence Analyst")
                 ):
-                    captured_system_prompts.append(msg.content[:80])
+                    call_info["system_prompt"] = msg.content[:80]
+        calls.append(call_info)
         return await original_ainvoke(self, messages, **kwargs)
 
     with patch.object(ChatOpenAI, "ainvoke", capturing_ainvoke):
         await evaluator(state)
 
+    assert len(calls) == 2, (
+        f"[E-V2-2] Expected 2 LLM calls (one V1, one V2), got {len(calls)}. Calls: {calls}"
+    )
+
+    system_prompts = [c["system_prompt"] for c in calls]
+
     assert any(
-        p.startswith("You are a Business Rule Adherence Analyst")
-        for p in captured_system_prompts
+        p and p.startswith("You are a Business Rule Adherence Analyst")
+        for p in system_prompts
     ), (
-        f"[E-V2-2] V2 system prompt was not used. Captured prompts: {captured_system_prompts}"
+        f"[E-V2-2] V2 system prompt was not used in any call. Captured: {system_prompts}"
+    )
+
+    assert any(
+        p and not p.startswith("You are a Business Rule Adherence Analyst")
+        for p in system_prompts
+    ), (
+        f"[E-V2-2] V1 system prompt was not used in any call. Captured: {system_prompts}"
     )
 
 

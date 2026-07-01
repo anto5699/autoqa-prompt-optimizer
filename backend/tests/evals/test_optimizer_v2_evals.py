@@ -6,8 +6,6 @@ O-V2-1  Optimised output conforms to V2 format and addresses RCA finding
 O-V2-2  Stagnant V2 record triggers fundamental rewrite (Levenshtein similarity < 0.6)
 O-V2-3  V2 optimiser never produces trigger/answer split
 """
-import difflib
-
 import pytest
 
 from agents.nodes.prompt_optimizer import prompt_optimizer
@@ -165,7 +163,28 @@ async def test_o_v2_2_stagnant_triggers_rewrite(eval_llm):
     output = result["parameter_records"]["AgentGreetingStagnant"]["current_description"]
     assert output, "[O-V2-2] prompt_optimizer returned empty description"
 
-    similarity = difflib.SequenceMatcher(None, _GREETING_DESC_V2, output).ratio()
+    def _levenshtein_similarity(a: str, b: str) -> float:
+        """Levenshtein similarity: 1 - (edit_distance / max_len). Returns 0.0 if both empty."""
+        m, n = len(a), len(b)
+        if m == 0 and n == 0:
+            return 1.0
+        if m == 0 or n == 0:
+            return 0.0
+        dp = list(range(n + 1))
+        for i in range(1, m + 1):
+            prev = dp[0]
+            dp[0] = i
+            for j in range(1, n + 1):
+                temp = dp[j]
+                dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+                prev = temp
+        return 1.0 - dp[n] / max(m, n)
+
+    similarity = _levenshtein_similarity(_GREETING_DESC_V2, output)
+
+    assert similarity < 0.6, (
+        f"[O-V2-2] Levenshtein similarity {similarity:.3f} >= 0.6; output is not fundamentally different.\nOutput:\n{output}"
+    )
 
     assert _is_structured_v2(output), (
         f"[O-V2-2] Output does not pass _is_structured_v2.\nOutput:\n{output}"

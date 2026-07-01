@@ -8,7 +8,7 @@ R-V2-3  V2 FN framed in EXPECTED BEHAVIOR terms
 """
 import pytest
 
-from agents.nodes.rca_analyzer import rca_analyzer
+from agents.nodes.rca_analyzer import rca_analyzer, _collect_error_cases
 from tests.evals.fixtures.state_factory import build_state
 from tests.evals.judge.runner import judge_output
 
@@ -175,6 +175,27 @@ async def test_r_v2_2_false_na_rca(eval_llm):
 
     findings = result["parameter_records"]["AgentGreetingNA"]["rca_findings"]
     assert findings, "[R-V2-2] rca_analyzer returned empty rca_findings"
+
+    # Verify that NA mispredictions (pred=NA, gt=Yes) are classified as false_na_prediction
+    _na_predictions = {"c1": "NA", "c2": "NA", "c3": "Yes"}
+    _gt_map = {
+        "c1": {"AgentGreetingNA": "Yes"},
+        "c2": {"AgentGreetingNA": "Yes"},
+        "c3": {"AgentGreetingNA": "Yes"},
+    }
+    _convs_by_id = {"c1": {}, "c2": {}, "c3": {}}
+    error_cases = _collect_error_cases(
+        "AgentGreetingNA",
+        _na_predictions,
+        {},
+        _gt_map,
+        _convs_by_id,
+        version="v2",
+    )
+    false_na_errors = [e for e in error_cases if e["error_type"] == "false_na_prediction"]
+    assert len(false_na_errors) >= 1, (
+        f"[R-V2-2] Expected at least one false_na_prediction error, got: {[e['error_type'] for e in error_cases]}"
+    )
 
     judge_config = {
         "dimensions": [

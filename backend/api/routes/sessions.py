@@ -22,12 +22,57 @@ from api.schemas.session import (
     SubmitDescriptionsRequest,
     SubmitDescriptionsResponse,
 )
-from config import DEFAULT_SYSTEM_PROMPT
+from config import DEFAULT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT_V2
 from utils.csv_parser import CSVParseError, parse
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions")
+
+
+def _build_rule_from_config(metric_name: str, config) -> dict:
+    """Build a rule dict from a MetricConfig.
+
+    Three-way branch:
+    - V2 (any type): single unified answer rule with evaluation_type/n_messages from config.
+    - V1 static: answer rule with entire-conversation scope.
+    - V1 dynamic: dynamic rule with trigger fields and entire-conversation scope.
+    """
+    answer_desc = (config.answer_description or "").strip()
+
+    if config.version == "v2":
+        return {
+            "rule_id": metric_name,
+            "rule_type": "answer",
+            "version": "v2",
+            "speaker": "agent",
+            "evaluation_type": config.evaluation_type,
+            "n_messages": config.n_messages,
+            "description": answer_desc,
+        }
+    elif config.type == "static":
+        return {
+            "rule_id": metric_name,
+            "rule_type": "answer",
+            "version": "v1",
+            "speaker": "agent",
+            "evaluation_type": "entire",
+            "n_messages": 0,
+            "description": answer_desc,
+        }
+    else:  # dynamic V1
+        trigger_desc = (config.trigger_description or "").strip()
+        return {
+            "rule_id": metric_name,
+            "rule_type": "dynamic",
+            "version": "v1",
+            "speaker": "agent",
+            "trigger_speaker": config.trigger_speaker or "customer",
+            "evaluation_type": "entire",
+            "n_messages": 0,
+            "description": answer_desc,
+            "trigger_description": trigger_desc,
+        }
 
 
 async def _run_graph(session_id: str, initial_state: OptimizationState) -> None:
@@ -132,36 +177,14 @@ async def submit_descriptions(session_id: str, body: SubmitDescriptionsRequest) 
     expanded_gt_map: dict[str, dict[str, str]] = {conv_id: {} for conv_id in original_gt_map}
 
     for metric_name, config in body.descriptions.items():
-        answer_desc = config.answer_description.strip()
-        if config.type == "static":
-            rules.append({
-                "rule_id": metric_name,
-                "rule_type": "answer",
-                "speaker": "agent",
-                "evaluation_type": "entire",
-                "n_messages": 0,
-                "description": answer_desc,
-            })
-            for conv_id, metric_gts in original_gt_map.items():
-                expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
-        else:  # dynamic
-            trigger_desc = (config.trigger_description or "").strip()
-            rules.append({
-                "rule_id": metric_name,
-                "rule_type": "dynamic",
-                "speaker": "agent",
-                "trigger_speaker": config.trigger_speaker or "customer",
-                "evaluation_type": "entire",
-                "n_messages": 0,
-                "description": answer_desc,
-                "trigger_description": trigger_desc,
-            })
-            for conv_id, metric_gts in original_gt_map.items():
-                expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
+        rules.append(_build_rule_from_config(metric_name, config))
+        for conv_id, metric_gts in original_gt_map.items():
+            expanded_gt_map[conv_id][metric_name] = metric_gts.get(metric_name, "NA")
 
     initial_state: OptimizationState = {
         "session_id": session_id,
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "system_prompt_v2": DEFAULT_SYSTEM_PROMPT_V2,
         "language": session["_language"],
         "llm_config": session.get("_llm_config", {}),
         "conversations": session["_conversations"],
@@ -340,6 +363,7 @@ async def continue_session(session_id: str, body: ContinueRequest) -> ContinueRe
     continuation_state: OptimizationState = {
         "session_id": new_session_id,
         "system_prompt": live.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
+        "system_prompt_v2": live.get("system_prompt_v2", DEFAULT_SYSTEM_PROMPT_V2),
         "language": live.get("language", "en"),
         "llm_config": live.get("llm_config", {}),
         "conversations": live.get("conversations", []),

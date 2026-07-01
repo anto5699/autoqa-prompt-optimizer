@@ -4,6 +4,14 @@
 
 ---
 
+## OPEN ITEMS
+
+**OI-1 — V2 system prompt NA support:** The V2 evaluation system prompt as supplied emits only `isQualified: true/false`; CONDITION-not-triggered and EXCEPTION cases therefore cannot yield NA until the V2 system prompt is extended to emit `isQualified: null` (or a `verdict` field). Verdict mapping is already forward-compatible (`_verdict_from_v2_result`).
+
+**OI-2 — Scope units mismatch (turns vs messages):** The V2 authoring spec (Appendix A §2, §6) defines Scope as `entire | first_n_turns | last_n_turns` where a Turn = one customer block + one agent block. The V2 evaluation system prompt scopes by messages via `evaluation_type ∈ {entire, first, last}` + `n_messages`. These are different units. The UI currently exposes message-count directly (to match the system prompt that runs). This must be resolved with the V2 engine owners — turns-to-messages conversion logic is not yet implemented.
+
+---
+
 ## Build Order
 
 Complete and verify each phase before starting the next. Never skip the ✅ checks.

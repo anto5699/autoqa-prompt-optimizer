@@ -576,6 +576,44 @@ Apply to every Claude call in every node:
 
 ---
 
+## V2 By Question Support
+
+The system supports two evaluation metric versions:
+
+### Version Field
+
+Both `RuleRecord` and `MetricConfig` carry a `version: Literal["v1", "v2"]` field set at configuration time. This dimension is **immutable** during optimization — V1 and V2 rules use separate system prompts and follow different optimization formats.
+
+### State and Evaluation Contract
+
+`OptimizationState` includes:
+- `system_prompt_v2: str` — The V2 business rule evaluation system prompt, applied only to rules where `version = "v2"`
+
+**Evaluation contract:** The evaluator (per rule 12 of CLAUDE.md) sends **one LLM call per (conversation × version)**, grouping all V1 rules under the V1 system prompt and all V2 rules under the V2 system prompt. This ensures each rule is evaluated by its appropriate prompt engine.
+
+### V2 Authoring Format
+
+V2 optimised descriptions use **unified CONDITION/EXPECTED BEHAVIOR/PROHIBITED/EXCEPTION format**, unlike V1's METRIC_NAME structured block. A V2 rule description is a single text block covering all four semantic dimensions:
+
+```
+CONDITION: <When this rule applies; scope in turns or messages>
+EXPECTED BEHAVIOR: <What the agent should do if the condition is met>
+PROHIBITED: <What the agent must not do; anti-patterns>
+EXCEPTION: <Scenarios where the rule does not apply even if condition met>
+```
+
+### CSV Export and Rule Type
+
+The **Prompts CSV export** includes:
+- `version` column: `"v1"` or `"v2"` per rule
+- `rule_type` column: `"unified"` for all V2 rules (V1 rules retain `"static"` or `"dynamic"`)
+
+### V2 NA Semantics
+
+**Current state:** The V2 system prompt emits only `isQualified: true/false`; NA verdicts require extension of the V2 prompt to emit `isQualified: null` or a three-way `verdict` field (see OI-1 in MILESTONES.md). Verdict mapping is centralized in `_verdict_from_v2_result()` in evaluator.py and is forward-compatible with future prompt updates.
+
+---
+
 ## Error Handling
 
 | Scenario | Behaviour |

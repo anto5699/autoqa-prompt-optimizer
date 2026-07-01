@@ -99,6 +99,31 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
     async def _process_rule(rule_id: str, record: dict) -> tuple[str, dict | None, str | None]:
         rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
 
+        if record.get("version") == "v2":
+            has_desc = bool(record.get("current_description", "").strip())
+            has_clarifications = bool(rule_answers)
+            if not has_desc:
+                mode = "generate"
+            elif has_clarifications:
+                mode = "rewrite"
+            elif not _is_structured_v2(record["current_description"]):
+                mode = "format"
+            else:
+                # Already V2 structured and no clarifications — no LLM call needed
+                return rule_id, None, None
+            task = _build_generation_task_v2(record, rule_answers, mode=mode)
+            async with semaphore:
+                response = await llm.ainvoke([
+                    SystemMessage(content=_SYSTEM_V2),
+                    HumanMessage(content=task),
+                ])
+            new_desc = response.content.strip()
+            if new_desc == record.get("current_description", ""):
+                return rule_id, None, None
+            updated = {**record, "current_description": new_desc}
+            logger.info("session=%s mode=baseline_v2 rule_id=%s mode=%s", state["session_id"], rule_id, mode)
+            return rule_id, updated, f"Prepared V2 baseline description for {rule_id}"
+
         if record.get("rule_type") == "dynamic":
             trigger_record = {
                 **record,
@@ -156,6 +181,103 @@ async def baseline_prompt_generator(state: OptimizationState) -> dict:
 
 def _is_structured(description: str) -> bool:
     return description.strip().startswith("METRIC_NAME:")
+
+
+_SYSTEM_V2 = """You are an expert QA rule description writer for contact centre quality evaluation.
+Rule descriptions use the V2 Unified Criteria format evaluated by the Business Rule Adherence Analyst.
+
+You MUST output descriptions using this exact format, sections in this exact order:
+
+CONDITION: <Always. | trigger event | AND/OR list>
+EXPECTED BEHAVIOR:
+  - <observable action from evaluated speaker>
+  AND / OR / THEN
+  - <next item>
+PROHIBITED:
+  - <disallowed action>
+EXCEPTION: <None. | situation | list>
+
+SECTION RULES:
+- CONDITION: when the metric applies. "Always." for unconditional. Connectors: AND, OR. Any speaker.
+- EXPECTED BEHAVIOR: mandatory. Observable actions from the evaluated speaker only. Connectors: AND, OR, THEN. Never reference the other speaker.
+- PROHIBITED: optional — omit this section entirely if there are no prohibited actions. Implicit OR. Evaluated speaker only.
+- EXCEPTION: mandatory. Use "None." when there are none. Implicit OR. Any participant or system event.
+
+HARD CONSTRAINTS:
+- Observable actions only — never use: "professional", "appropriately", "effectively", "well", "sufficiently", "adequately"
+- Never reference internal tools, message identifiers, turn identifiers, or raw timestamps
+- No conditional programming logic (if X then Y else Z) — split into separate metrics instead
+- Never mix AND and OR within a single list (pick one connector per list)
+- Present tense, active voice, plain English. All statements end with a period.
+- Bullet ≤ 20 words; whole description ≤ 12 lines
+- CONDITION, EXPECTED BEHAVIOR, and EXCEPTION are all mandatory
+- PROHIBITED is optional; include only when a specific action must be explicitly forbidden
+
+REFERENCE PATTERNS:
+# Unconditional
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent greets the customer.
+EXCEPTION: No agent messages exist.
+
+# Sequential
+CONDITION: Customer requests account information.
+EXPECTED BEHAVIOR:
+  - Agent verifies identity.
+  THEN
+  - Agent provides information.
+EXCEPTION:
+  - Customer refuses verification.
+
+# With PROHIBITED
+CONDITION: Always.
+EXPECTED BEHAVIOR:
+  - Agent communicates courteously.
+PROHIBITED:
+  - Agent guarantees approval.
+  - Agent shares customer data.
+EXCEPTION: None.
+
+ANTI-PATTERNS (never produce these):
+- "Agent is professional." → write "Agent uses courteous language." (observable action)
+- Mixing AND and OR: "Agent greets AND confirms name OR verifies ID" → pick one connector
+- Branching: "If customer agrees, agent refunds; otherwise escalates." → split into two metrics
+"""
+
+
+def _is_structured_v2(description: str) -> bool:
+    stripped = description.strip()
+    if stripped.upper().startswith("CONDITION:"):
+        return True
+    return any(
+        line.strip().startswith("EXPECTED BEHAVIOR:")
+        for line in stripped.splitlines()
+    )
+
+
+def _build_generation_task_v2(record: dict, user_answers: dict, *, mode: str) -> str:
+    rule_id = record["rule_id"]
+    desc = record.get("current_description", "").strip()
+    lines = [f"Rule ID: {rule_id}"]
+
+    if mode == "generate":
+        lines.append(
+            f"Generate a V2 Unified Criteria description for this quality rule: {rule_id}. "
+            "Produce CONDITION, EXPECTED BEHAVIOR, and EXCEPTION at minimum."
+        )
+    elif mode == "format":
+        lines.append("Convert the following description to V2 Unified Criteria format.")
+        lines.append("Do NOT add, remove, or alter conditions — only reformat to the required structure.")
+        lines.append(f"\nCurrent description:\n{desc}")
+    elif mode == "rewrite":
+        lines.append("Rewrite to V2 Unified Criteria format, incorporating the user clarifications below.")
+        lines.append("User clarifications are authoritative — follow them even if they alter scope.")
+        lines.append(f"\nCurrent description:\n{desc}")
+        answers_text = "\n".join(f"- {a}" for a in user_answers.values() if a)
+        if answers_text:
+            lines.append(f"\nUser clarifications:\n{answers_text}")
+
+    return "\n".join(lines)
 
 
 def _build_generation_task(record: dict, user_answers: dict, *, mode: str) -> str:

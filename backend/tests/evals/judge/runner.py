@@ -70,7 +70,7 @@ async def judge_output(
     *,
     scenario_id: str = "",
 ) -> JudgeResult:
-    """Score a node output against per-dimension judge config."""
+    """Score a node output against the scenario's per-dimension judge config."""
     dimensions = judge_config["dimensions"]
     pass_threshold = float(judge_config.get("pass_threshold", 0.70))
 

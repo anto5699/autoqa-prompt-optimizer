@@ -1,0 +1,71 @@
+id: opt-vague-001
+description: "Description uses vague evaluative terms; optimizer must replace with observable criteria"
+node: prompt_optimizer
+failure_mode: ambiguous
+
+rule:
+  rule_id: ProfessionalTone
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Professional Tone
+    SPEAKER: Agent
+    ACTION: Communicates in a professional and appropriate manner throughout the call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent maintains a professional tone at all times
+    2. Agent responds appropriately to the customer's needs
+    3. Agent avoids language that could be perceived negatively
+    EXAMPLES:
+    PASS:
+    1. "I completely understand. Let me look into that for you right away."
+    FAIL:
+    1. "That's not my problem."
+
+rca_findings: |
+  Root cause: PASS_CRITERIA use subjective, non-observable terms: "professional tone", "appropriately",
+  "perceived negatively". Different evaluators interpret these differently, producing inconsistent predictions.
+  Recommendation: Replace with concrete, transcript-observable criteria: no filler words
+  or slang, no dismissive phrases, uses complete sentences, maintains formal address.
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "I've been waiting for a callback for two days!"}
+      - {speaker: agent, msg: "Yeah, sorry about that. Let me check what's going on."}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "Can you explain the charge on my bill?"}
+      - {speaker: agent, msg: "Absolutely. The charge relates to the additional data plan activated on the 5th. I can walk you through it in detail."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: improvement_direction
+      weight: 0.25
+      prompt: |
+        Original criteria used: "professional tone", "appropriately", "perceived negatively" — all vague.
+        New description: {output}
+        Does the new description replace these with concrete, transcript-observable criteria (e.g. specific phrases to avoid, sentence structure requirements)?
+    - id: functional_correctness
+      weight: 0.35
+      prompt: |
+        New description: {output}
+        The failure case is an agent saying "Yeah, sorry about that" — informal/slang language.
+        Does the new description include at least one criterion that would flag slang, filler words, or informal language as a fail condition? Score 1.0 if yes, 0 if the criteria are still too vague to catch this case.
+    - id: generalisation
+      weight: 0.25
+      prompt: |
+        New description: {output}
+        Do the new criteria remain general enough to evaluate professional tone across a range of conversation types, without listing every possible unprofessional phrase?
+    - id: format_compliance
+      weight: 0.15
+      prompt: |
+        New description: {output}
+        Does the description above contain all required sections: METRIC_NAME, SPEAKER, ACTION, PASS_LOGIC, numbered PASS_CRITERIA, and EXAMPLES? Score 1.0 if all sections are present, 0.5 if EXAMPLES are missing but the rest are present, 0 if core sections (METRIC_NAME, PASS_CRITERIA) are absent.
+  pass_threshold: 0.70

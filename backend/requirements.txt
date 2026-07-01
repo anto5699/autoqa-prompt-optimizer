@@ -10,5 +10,7 @@ pandas>=2.2
 sse-starlette
 pytest
 pytest-asyncio
+pytest-json-report
 python-multipart
 httpx
+pyyaml

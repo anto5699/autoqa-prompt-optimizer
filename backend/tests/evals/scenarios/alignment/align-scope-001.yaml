@@ -1,0 +1,68 @@
+id: align-scope-001
+description: "Description evaluates wrong speaker behaviour (criteria check Customer not Agent); audit must identify scope mismatch"
+node: gt_alignment_audit
+
+rule:
+  rule_id: CustomerSatisfaction
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Customer Satisfaction
+    SPEAKER: Agent
+    ACTION: Confirms customer satisfaction before ending the call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Customer explicitly states they are satisfied
+    2. Customer thanks the agent
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.63, precision: 0.58, recall: 0.68, f1: 0.63}
+  - {iteration: 2, description: "...", accuracy: 0.62, precision: 0.57, recall: 0.67, f1: 0.62}
+  - {iteration: 3, description: "...", accuracy: 0.63, precision: 0.59, recall: 0.68, f1: 0.63}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Is there anything else I can help you with? Were we able to resolve your issue today?"}
+      - {speaker: customer, msg: "You were great, thanks for your help."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Is everything sorted for you today? Happy with the outcome?"}
+      - {speaker: customer, msg: "I suppose so. Bye."}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent, msg: "Have a good day!"}
+      - {speaker: customer, msg: "Not really happy about the wait time, but thanks."}
+    ground_truth: "No"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: gap_identification
+      weight: 0.40
+      prompt: |
+        The PASS_CRITERIA check CUSTOMER responses ("customer states satisfied", "customer thanks agent") even though speaker=Agent. c2 (agent asked confirming questions, GT=Yes, pred=No) shows this gap.
+        Audit output: {output}
+        Does the audit identify any aspect of the customer-vs-agent scope issue? Score 1.0 if it explicitly flags that criteria evaluate customer behaviour rather than agent actions (speaker scope mismatch). Score 0.7 if it identifies that criteria check customer responses or customer-expressed satisfaction (even framed as "implicit vs explicit") without explicitly naming the speaker=Agent mismatch. Score 0 if it only discusses accuracy or labelling without any mention of customer/agent scope.
+    - id: strategy_clarity
+      weight: 0.35
+      prompt: |
+        Audit output: {output}
+        The correct strategy is to shift the criteria from evaluating CUSTOMER responses to evaluating AGENT behaviour (e.g. agent asks for confirmation, agent invites feedback, agent checks satisfaction).
+        Does the audit's optimization strategy recommend changing the criteria to measure what the AGENT does rather than what the CUSTOMER says or does? Score 1.0 if it explicitly recommends agent-action criteria. Score 0.7 if it recommends shifting from customer responses to agent behaviour, even without naming specific agent actions. Score 0 if it only discusses implicit vs explicit customer satisfaction without addressing the agent/customer scope flip.
+    - id: non_hallucination
+      weight: 0.25
+      prompt: |
+        c1 and c3 are correctly classified. Only c2 shows the scope gap.
+        The text below is the full audit output:
+        ---
+        {output}
+        ---
+        Does the audit above avoid claiming there are additional problems beyond what c1–c3 evidence? Score 1.0 if it only references the scope issue visible in c2. Score 0 if it invents unrelated problems not present in any conversation.
+  pass_threshold: 0.70

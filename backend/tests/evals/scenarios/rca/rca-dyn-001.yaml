@@ -1,0 +1,70 @@
+id: rca-dyn-001
+description: "Dynamic metric: trigger fires on payment mentions; answer rule checked even when refund is not the topic"
+node: rca_analyzer
+failure_mode: too_broad
+
+rule:
+  rule_id: RefundProtocol
+  rule_type: dynamic
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Refund Protocol
+    SPEAKER: Agent
+    ACTION: Follows the refund protocol when a customer requests a refund
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent confirms refund eligibility before processing
+    2. Agent provides a reference number for the refund
+    EXAMPLES:
+    PASS:
+    1. "I've confirmed you're eligible. Your refund reference is REF-4892."
+    FAIL:
+    1. "I'll process that for you right away."
+  trigger_description: |
+    TRIGGER: Customer mentions payment, billing, or money
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "I'd like to make a payment on my account."}
+      - {speaker: agent,    msg: "Of course. Your balance is $45. I can process that now."}
+      - {speaker: customer, msg: "Please go ahead."}
+    ground_truth: "NA"
+    prediction: "No"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "I have a question about my bill — the amount seems wrong."}
+      - {speaker: agent,    msg: "Let me review your account. I see a charge for the premium tier added last month."}
+      - {speaker: customer, msg: "OK, that makes sense."}
+    ground_truth: "NA"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: customer, msg: "I was charged twice for my subscription. I want a refund."}
+      - {speaker: agent,    msg: "I can see the duplicate charge. You are eligible for a refund. Your reference number is REF-7731."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: root_cause_accuracy
+      weight: 0.40
+      prompt: |
+        This is a dynamic metric. Trigger: "Customer mentions payment, billing, or money." Answer: refund protocol.
+        c1 (payment inquiry) and c2 (billing question) have GT=NA — trigger should NOT have fired because no refund is requested.
+        RCA output: {output}
+        Does the RCA correctly identify that the trigger description is too broad, firing on any payment/billing mention instead of only when a refund is explicitly requested?
+    - id: actionability
+      weight: 0.30
+      prompt: |
+        RCA output: {output}
+        Does the RCA recommend narrowing the trigger to detect explicit refund requests (e.g. "customer explicitly requests a refund or mentions being charged incorrectly") rather than generic payment topics?
+    - id: non_hallucination
+      weight: 0.30
+      prompt: |
+        c3 is a correct true positive. Only c1 and c2 are misclassified (pred=No but GT=NA, meaning trigger should not fire).
+        RCA output: {output}
+        Does the RCA avoid misattributing the errors to the answer rule rather than the trigger?
+  pass_threshold: 0.70

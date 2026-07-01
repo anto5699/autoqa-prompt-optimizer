@@ -1,0 +1,96 @@
+id: e2e-alreadyGood-001
+description: "Both rules already at ≥80% accuracy after first evaluation pass — loop must exit without optimization"
+node: e2e
+
+e2e:
+  max_iterations: 5
+  accuracy_target: 0.80
+  expect_convergence: true
+  expect_max_iterations: 1
+  expect_locked_rules: [AgentIntroduction, ClosingGreeting]
+
+rules:
+  - rule_id: AgentIntroduction
+    rule_type: answer
+    speaker: Agent
+    evaluation_type: first
+    n_messages: 4
+    description: |
+      METRIC_NAME: Agent Introduction
+      SPEAKER: Agent
+      ACTION: Introduces by name
+      PASS_LOGIC: ALL
+      PASS_CRITERIA:
+      1. Agent states their name in the first 4 messages
+      EXAMPLES:
+      PASS:
+      1. "Hi, I'm Alex."
+      FAIL:
+      1. "Hello, how can I help?"
+
+  - rule_id: ClosingGreeting
+    rule_type: answer
+    speaker: Agent
+    evaluation_type: entire
+    n_messages: -1
+    description: |
+      METRIC_NAME: Closing Greeting
+      SPEAKER: Agent
+      ACTION: Invites further questions before ending call
+      PASS_LOGIC: ANY
+      PASS_CRITERIA:
+      1. Agent asks if the customer needs further assistance in any phrasing
+      EXAMPLES:
+      PASS:
+      1. "Is there anything else I can help you with?"
+      2. "Any other questions for me today?"
+      FAIL:
+      1. "Goodbye." (no invitation)
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Hi, I'm Taylor from support. How can I help?"}
+      - {speaker: customer, msg: "I need help with my account."}
+      - {speaker: agent,    msg: "Of course. Is there anything else after this?"}
+      - {speaker: customer, msg: "Nope, thanks."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Good morning, this is Chris. What can I do for you?"}
+      - {speaker: customer, msg: "Password reset please."}
+      - {speaker: agent,    msg: "Done! Any other questions today?"}
+      - {speaker: customer, msg: "No, perfect."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Thank you for calling, I'm Riley."}
+      - {speaker: customer, msg: "Hi."}
+      - {speaker: agent,    msg: "Take care. Goodbye!"}
+      - {speaker: customer, msg: "Bye."}
+    ground_truth:
+      AgentIntroduction: "Yes"
+      ClosingGreeting: "No"
+
+judge:
+  dimensions:
+    - id: convergence_achieved
+      weight: 0.50
+      prompt: |
+        E2E result (JSON): {output}
+        Did both rules converge immediately (status="converged") — ideally before or after the first evaluation pass — without needing multiple optimization iterations? Check parameter_records for both rules' status.
+    - id: iteration_efficiency
+      weight: 0.30
+      prompt: |
+        E2E result (JSON): {output}
+        Was current_iteration ≤ 2 at termination? Score 1.0 if ≤1, 0.7 if 2, 0.3 if 3+.
+    - id: locked_rules_respected
+      weight: 0.20
+      prompt: |
+        E2E result (JSON): {output}
+        Was a final_report generated, indicating the pipeline completed cleanly?
+  pass_threshold: 0.70

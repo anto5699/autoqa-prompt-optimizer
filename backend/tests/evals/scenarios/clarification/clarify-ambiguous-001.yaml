@@ -1,0 +1,67 @@
+id: clarify-ambiguous-001
+description: "Stagnant rule with genuine scope ambiguity; clarification node must generate targeted question"
+node: mid_loop_clarification
+expect_interrupt: true
+
+rule:
+  rule_id: EmpathyExpression
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Empathy Expression
+    SPEAKER: Agent
+    ACTION: Demonstrates empathy toward the customer's situation
+    PASS_LOGIC: ANY
+    PASS_CRITERIA:
+    1. Agent uses empathy phrases such as "I understand your frustration"
+    2. Agent acknowledges the difficulty of the customer's situation
+
+rca_findings: |
+  The description's criteria are ambiguous about what depth of empathy qualifies.
+  Agents using formulaic phrases ("I understand") sometimes pass and sometimes fail.
+  There is genuine ambiguity about whether scripted empathy phrases count or whether
+  the agent must demonstrate personalised acknowledgment of the specific situation.
+  A domain expert could clarify: does a scripted phrase like "I understand your frustration"
+  count as empathy regardless of context, or must the agent reference the specific issue?
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.62, precision: 0.58, recall: 0.66, f1: 0.62}
+  - {iteration: 2, description: "...", accuracy: 0.63, precision: 0.60, recall: 0.67, f1: 0.63}
+  - {iteration: 3, description: "...", accuracy: 0.62, precision: 0.59, recall: 0.65, f1: 0.62}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "My account has been locked for no reason."}
+      - {speaker: agent, msg: "I understand your frustration. Let me look into this."}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "I've been on hold for 30 minutes."}
+      - {speaker: agent, msg: "I'm sorry for the wait. I can see that must have been really frustrating — 30 minutes is far too long."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: question_relevance
+      weight: 0.40
+      prompt: |
+        Rule: Empathy Expression. RCA identified ambiguity between scripted phrases and personalised acknowledgment.
+        Clarification question(s) generated: {output}
+        Does the question directly address the scripted-vs-personalised empathy ambiguity? Score low if the question is about unrelated aspects of the rule.
+    - id: non_redundancy
+      weight: 0.35
+      prompt: |
+        The existing Empathy Expression description already states: "Agent uses empathy phrases such as 'I understand your frustration'" and "Agent acknowledges the difficulty of the customer's situation."
+        Generated question: {output}
+        Does the generated question above probe a boundary NOT already answered by those two criteria? Score 1.0 if it introduces a new distinction (e.g. scripted vs. personalised). Score 0 if it merely restates what those criteria already say.
+    - id: plain_language
+      weight: 0.25
+      prompt: |
+        Generated question: {output}
+        Is the question above written in everyday language that a non-technical call centre supervisor can understand, without using internal system terms like PASS_CRITERIA, criterion, description, or evaluation system? Score 1.0 if yes, 0 if it contains technical jargon.
+  pass_threshold: 0.70

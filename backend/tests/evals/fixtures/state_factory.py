@@ -3,10 +3,12 @@ from config import DEFAULT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT_V2
 
 
 def build_state(scenario: dict) -> OptimizationState:
-    """Build an OptimizationState from a scenario dict.
+    """Build an OptimizationState from a YAML scenario dict.
 
     Handles both single-rule scenarios (rule: {...}) and multi-rule E2E scenarios
-    (rules: [...]).  Supports V2 records via the 'version' field on each rule.
+    (rules: [...]).  For E2E scenarios, conversations may omit 'prediction' fields
+    since the evaluator node will fill them in via live LLM calls.
+    Supports V2 records via the 'version' field on each rule.
     """
     is_e2e = "e2e" in scenario
     raw_rules = scenario.get("rules") or [scenario["rule"]]
@@ -18,6 +20,8 @@ def build_state(scenario: dict) -> OptimizationState:
     ]
 
     # --- Ground truth map ---
+    # For single-rule scenarios: ground_truth is a string.
+    # For multi-rule scenarios: ground_truth is a dict {rule_id: "Yes/No/NA"}.
     def _get_gt(conv: dict, rule_id: str) -> str:
         gt = conv.get("ground_truth", "NA")
         if isinstance(gt, dict):
@@ -120,6 +124,7 @@ def build_state(scenario: dict) -> OptimizationState:
         "clarifying_questions": [],
         "user_answers": {},
         "clarification_complete": True,
+        # Pre-populate clarified_rule_ids for E2E so mid_loop_clarification never fires
         "clarified_rule_ids": all_rule_ids if is_e2e else [],
         "current_iteration": 0 if is_e2e else scenario.get("current_iteration", 1),
         "max_iterations": e2e_cfg.get("max_iterations", 5),

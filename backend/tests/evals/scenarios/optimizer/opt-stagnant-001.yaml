@@ -1,0 +1,91 @@
+id: opt-stagnant-001
+description: "Rule stagnant at 65% for 3 iterations; optimizer must produce structurally different description"
+node: prompt_optimizer
+failure_mode: stagnant
+
+rule:
+  rule_id: HoldAnnouncement
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Hold Announcement
+    SPEAKER: Agent
+    ACTION: Informs the customer before placing them on hold
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent asks permission before placing on hold
+    2. Agent provides a reason for the hold
+    EXAMPLES:
+    PASS:
+    1. "May I place you on brief hold while I check that?"
+    FAIL:
+    1. "Please hold." (no permission or reason given)
+
+iteration_history:
+  - iteration: 1
+    description: "METRIC_NAME: Hold Announcement\nSPEAKER: Agent\nACTION: Informs the customer before placing them on hold\nPASS_LOGIC: ALL\nPASS_CRITERIA:\n1. Agent asks permission before placing on hold\n2. Agent provides a reason for the hold"
+    accuracy: 0.65
+    precision: 0.60
+    recall: 0.70
+    f1: 0.65
+  - iteration: 2
+    description: "METRIC_NAME: Hold Announcement\nSPEAKER: Agent\nACTION: Informs the customer before placing them on hold\nPASS_LOGIC: ALL\nPASS_CRITERIA:\n1. Agent asks permission before placing on hold\n2. Agent provides a reason for the hold"
+    accuracy: 0.65
+    precision: 0.62
+    recall: 0.68
+    f1: 0.65
+  - iteration: 3
+    description: "METRIC_NAME: Hold Announcement\nSPEAKER: Agent\nACTION: Informs the customer before placing them on hold\nPASS_LOGIC: ALL\nPASS_CRITERIA:\n1. Agent asks permission before placing on hold\n2. Agent provides a reason for the hold"
+    accuracy: 0.65
+    precision: 0.61
+    recall: 0.69
+    f1: 0.65
+
+rca_findings: |
+  Root cause: Stagnation detected — accuracy unchanged across 3 iterations.
+  The description correctly identifies the two requirements (permission + reason) but the
+  PASS_LOGIC: ALL is too strict. Ground truth appears to reward cases where the agent provides
+  at least one of: explicit permission OR stated reason, not necessarily both.
+  Recommendation: Change PASS_LOGIC to ANY and add explicit examples for each path.
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Just a moment please."}
+      - {speaker: customer, msg: "OK."}
+    ground_truth: "No"
+    prediction: "No"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "I'll need to check our system for that — could you hold for a moment?"}
+      - {speaker: customer, msg: "Sure."}
+    ground_truth: "Yes"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: improvement_direction
+      weight: 0.25
+      prompt: |
+        The description has been stagnant at 65% for 3 identical iterations. The RCA recommends changing PASS_LOGIC or restructuring.
+        New description: {output}
+        Is the new description structurally different from "PASS_LOGIC: ALL / 1. asks permission / 2. provides reason"? Score low if it's merely a rephrasing of the same two criteria with PASS_LOGIC: ALL.
+    - id: functional_correctness
+      weight: 0.35
+      prompt: |
+        c2: agent said "I'll need to check our system for that — could you hold for a moment?" This gives a reason AND asks permission.
+        New description: {output}
+        Does the new description include criteria that would pass c2? Score 1.0 if the description accepts a case where the agent states a reason AND asks permission (e.g. via ANY logic or a combined criterion). Score 0 if the description requires explicit permission AND explicit reason as separate ALL criteria without allowing the combined case to pass.
+    - id: generalisation
+      weight: 0.25
+      prompt: |
+        New description: {output}
+        Does the description handle the range of hold announcement styles (explicit permission, implicit reason, combined) without over-fitting to the two test conversations?
+    - id: format_compliance
+      weight: 0.15
+      prompt: |
+        New description: {output}
+        Does the description contain METRIC_NAME, SPEAKER, ACTION, PASS_LOGIC, numbered PASS_CRITERIA, and EXAMPLES sections? Score 1.0 if all present, 0.5 if EXAMPLES missing, 0 if core sections (METRIC_NAME, PASS_CRITERIA) are absent.
+  pass_threshold: 0.70

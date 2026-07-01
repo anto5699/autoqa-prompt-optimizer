@@ -1,0 +1,75 @@
+id: rca-fn-002
+description: "Description accepts any assistance attempt; GT requires specific account verification"
+node: rca_analyzer
+failure_mode: too_broad
+
+rule:
+  rule_id: IdentityVerification
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Identity Verification
+    SPEAKER: Agent
+    ACTION: Confirms customer identity before accessing account details
+    PASS_LOGIC: ANY
+    PASS_CRITERIA:
+    1. Agent asked the customer any security question
+    2. Agent confirmed the caller's name at any point
+    EXAMPLES:
+    PASS:
+    1. "Can I get your name please?"
+    FAIL:
+    1. "How can I help you today?"
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Hi, how can I help you today?"}
+      - {speaker: customer, msg: "I need to check my balance."}
+      - {speaker: agent,    msg: "Sure, what's your account number?"}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Good morning! What's your name?"}
+      - {speaker: customer, msg: "I'm Sarah."}
+      - {speaker: agent,    msg: "Thanks Sarah. What can I do for you today?"}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Can I verify your date of birth and the last 4 digits of your SSN?"}
+      - {speaker: customer, msg: "Sure, 15th March 1985 and 4532."}
+      - {speaker: agent,    msg: "Thank you, I've verified your identity."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c4
+    transcript:
+      - {speaker: agent,    msg: "For security purposes, can I have your full name and account PIN?"}
+      - {speaker: customer, msg: "John Smith, PIN 2847."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: root_cause_accuracy
+      weight: 0.40
+      prompt: |
+        Rule PASS_CRITERIA: "Agent asked any security question" or "confirmed caller's name".
+        False positives: c1 (asking account number is not identity verification, GT=No pred=Yes), c2 (just getting a name without verifying GT=No pred=Yes).
+        RCA output: {output}
+        Does the RCA correctly identify that the PASS_CRITERIA are too permissive — accepting any name-mention or question instead of requiring actual identity validation?
+    - id: actionability
+      weight: 0.30
+      prompt: |
+        RCA output: {output}
+        Does the RCA recommend adding specific verification steps (e.g. date of birth, PIN, security question with answer) rather than just name-asking?
+    - id: non_hallucination
+      weight: 0.30
+      prompt: |
+        Only c1 and c2 are false positives. c3 and c4 are correct positives.
+        RCA output: {output}
+        Does the RCA avoid claiming there are false negatives or citing problems not evidenced in the error cases?
+  pass_threshold: 0.70

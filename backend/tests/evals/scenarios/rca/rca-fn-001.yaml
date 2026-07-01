@@ -1,0 +1,71 @@
+id: rca-fn-001
+description: "Description requires exact closing phrase; equivalent phrasings produce false negatives"
+node: rca_analyzer
+failure_mode: too_narrow
+
+rule:
+  rule_id: ClosingGreeting
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Closing Greeting
+    SPEAKER: Agent
+    ACTION: Closes the call by asking if the customer needs anything else
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent says the exact phrase "Is there anything else I can help you with today?"
+    EXAMPLES:
+    PASS:
+    1. "Is there anything else I can help you with today?"
+    FAIL:
+    1. "Thank you, goodbye."
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent,    msg: "Thank you for calling. Is there anything else I can assist you with?"}
+      - {speaker: customer, msg: "No, that's all. Thanks!"}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c2
+    transcript:
+      - {speaker: agent,    msg: "Happy to help! Any other questions for me today?"}
+      - {speaker: customer, msg: "Nope, you've been great."}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c3
+    transcript:
+      - {speaker: agent,    msg: "Is there anything else I can help you with today?"}
+      - {speaker: customer, msg: "No thanks."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c4
+    transcript:
+      - {speaker: agent,    msg: "Alright, take care!"}
+      - {speaker: customer, msg: "Bye."}
+    ground_truth: "No"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: root_cause_accuracy
+      weight: 0.40
+      prompt: |
+        Rule description: "Agent says the exact phrase 'Is there anything else I can help you with today?'"
+        Errors: c1 and c2 have prediction=No but ground_truth=Yes.
+        RCA output: {output}
+        Does the RCA correctly identify that the exact-phrase requirement is too narrow and causes false negatives for semantically equivalent closing questions?
+    - id: actionability
+      weight: 0.30
+      prompt: |
+        RCA output: {output}
+        Does the RCA give a specific, actionable recommendation to broaden the PASS_CRITERIA beyond the exact phrase?
+    - id: non_hallucination
+      weight: 0.30
+      prompt: |
+        Error evidence — c1: agent said "Is there anything else I can assist you with?" (pred=No, GT=Yes), c2: "Any other questions for me today?" (pred=No, GT=Yes).
+        RCA output: {output}
+        Does the RCA only reference failure patterns actually present in these two conversations, without inventing additional issues?
+  pass_threshold: 0.70

@@ -1,0 +1,69 @@
+id: rca-fp-001
+description: "Description requires proactive supervisor-escalation offer; calls are routine and never involve escalation"
+node: rca_analyzer
+failure_mode: ambiguous
+
+rule:
+  rule_id: EscalationOffer
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Escalation Offer
+    SPEAKER: Agent
+    ACTION: Proactively offers to escalate to a supervisor if the customer is dissatisfied
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent explicitly asks if the customer would like to speak with a supervisor
+    2. Agent offers escalation before the customer requests it
+    EXAMPLES:
+    PASS:
+    1. "Would you like me to transfer you to my supervisor?"
+    FAIL:
+    1. "I'll do my best to help you."
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "I need to update my address."}
+      - {speaker: agent,    msg: "Of course! I can help with that. What's your new address?"}
+      - {speaker: customer, msg: "123 Main St."}
+      - {speaker: agent,    msg: "Updated! Is there anything else I can help with?"}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "What are your business hours?"}
+      - {speaker: agent,    msg: "We're open Monday to Friday 8am-8pm and Saturday 9am-5pm."}
+      - {speaker: customer, msg: "Great, thanks."}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: customer, msg: "This is the third time I've called about this billing issue!"}
+      - {speaker: agent,    msg: "I sincerely apologise. Would you like me to transfer you to a supervisor who can prioritise this?"}
+      - {speaker: customer, msg: "Yes please."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: root_cause_accuracy
+      weight: 0.40
+      prompt: |
+        Rule requires proactive escalation offer. c1 and c2 are routine calls (address update, hours inquiry) where no dissatisfaction exists — GT=No but pred=Yes.
+        RCA output: {output}
+        Does the RCA identify that the description doesn't define when escalation is applicable, causing it to fire on ALL calls rather than only when dissatisfaction is present?
+    - id: actionability
+      weight: 0.30
+      prompt: |
+        RCA output: {output}
+        Does the RCA recommend adding a trigger condition or scope qualifier to the description (e.g. "only when customer expresses dissatisfaction or frustration")?
+    - id: non_hallucination
+      weight: 0.30
+      prompt: |
+        c3 is a correct positive. c1 and c2 are the only false positives.
+        RCA output: {output}
+        Does the RCA avoid claiming false negatives exist or citing failure patterns not present in the conversations?
+  pass_threshold: 0.70

@@ -1,0 +1,44 @@
+id: clarify-noclarify-001
+description: "Non-stagnant rule (only 1 iteration in history) — no interrupt should fire"
+node: mid_loop_clarification
+expect_interrupt: false
+
+rule:
+  rule_id: Greeting
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: first
+  n_messages: 3
+  description: |
+    METRIC_NAME: Greeting
+    SPEAKER: Agent
+    ACTION: Greets the customer at the start of the call
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent introduces themselves by name
+    2. Agent states the company name
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.75, precision: 0.70, recall: 0.80, f1: 0.75}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Thank you for calling Acme Corp, this is Alex. How can I help?"}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Hello, how can I help you today?"}
+    ground_truth: "No"
+    prediction: "No"
+
+judge:
+  dimensions:
+    - id: question_relevance
+      weight: 1.0
+      prompt: |
+        This scenario should NOT trigger a clarification interrupt — the rule is not stagnant (only 1 iteration in history, need 3+).
+        Result: {output}
+        If the node returned without interrupting (empty result), score 1.0. If it generated questions despite the rule not being stagnant, score 0.0.
+  pass_threshold: 0.70

@@ -1,0 +1,64 @@
+id: align-inconsistent-001
+description: "Two nearly identical transcripts have opposite GT labels — audit must flag the labelling inconsistency"
+node: gt_alignment_audit
+
+rule:
+  rule_id: EmpathyExpression
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Empathy Expression
+    SPEAKER: Agent
+    ACTION: Expresses empathy toward customer's situation
+    PASS_LOGIC: ANY
+    PASS_CRITERIA:
+    1. Agent uses empathy phrases ("I understand", "I'm sorry to hear that")
+    2. Agent acknowledges the difficulty of the customer's situation
+
+iteration_history:
+  - {iteration: 1, description: "...", accuracy: 0.60, precision: 0.55, recall: 0.65, f1: 0.60}
+  - {iteration: 2, description: "...", accuracy: 0.61, precision: 0.57, recall: 0.65, f1: 0.61}
+  - {iteration: 3, description: "...", accuracy: 0.60, precision: 0.56, recall: 0.64, f1: 0.60}
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: customer, msg: "I've been waiting three days for a technician."}
+      - {speaker: agent, msg: "I understand your frustration. Let me check the schedule for you."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: customer, msg: "I've been waiting three days for a technician."}
+      - {speaker: agent, msg: "I understand your frustration. I'll look into this for you now."}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c3
+    transcript:
+      - {speaker: customer, msg: "My internet has been down all week."}
+      - {speaker: agent, msg: "I'm really sorry to hear that. That must be very disruptive."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: gap_identification
+      weight: 0.40
+      prompt: |
+        c1 and c2 have nearly identical transcripts (same customer complaint, same agent empathy phrase) but opposite GT labels (c1=Yes, c2=No).
+        Audit output: {output}
+        Does the audit identify the labelling inconsistency between c1 and c2 as a fundamental GT alignment problem?
+    - id: strategy_clarity
+      weight: 0.35
+      prompt: |
+        Audit output: {output}
+        Does the audit recommend human review of the inconsistent labels rather than trying to fix the description?
+    - id: non_hallucination
+      weight: 0.25
+      prompt: |
+        c3 is consistently labelled and correctly classified.
+        Audit output: {output}
+        Does the audit focus on the c1/c2 inconsistency without inventing issues in c3?
+  pass_threshold: 0.70

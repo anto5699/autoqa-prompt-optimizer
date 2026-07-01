@@ -1,0 +1,74 @@
+id: opt-broad-001
+description: "Too-broad identity verification + RCA; optimizer must add specific verification steps"
+node: prompt_optimizer
+failure_mode: too_broad
+
+rule:
+  rule_id: IdentityVerification
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Identity Verification
+    SPEAKER: Agent
+    ACTION: Confirms customer identity before accessing account details
+    PASS_LOGIC: ANY
+    PASS_CRITERIA:
+    1. Agent asked the customer any security question
+    2. Agent confirmed the caller's name at any point
+    EXAMPLES:
+    PASS:
+    1. "Can I get your name please?"
+    FAIL:
+    1. "How can I help you today?"
+
+rca_findings: |
+  Root cause: PASS_CRITERIA accept "any security question" or simple name confirmation.
+  This is too broad. Asking "What's your name?" without additional verification does not
+  constitute identity verification per ground truth expectations. The ground truth rewards
+  multi-factor verification: at minimum two pieces of identifying information (e.g. full name +
+  date of birth, or name + account PIN).
+  Recommendation: Update PASS_CRITERIA to require two distinct verification data points.
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "What's your name?"}
+      - {speaker: customer, msg: "John Smith."}
+      - {speaker: agent, msg: "Great, how can I help?"}
+    ground_truth: "No"
+    prediction: "Yes"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Can I verify your date of birth and the last 4 digits of your card?"}
+      - {speaker: customer, msg: "15th March 1980 and 4567."}
+      - {speaker: agent, msg: "Verified, thank you."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: improvement_direction
+      weight: 0.25
+      prompt: |
+        Original PASS_CRITERIA accept any name confirmation. RCA says require two verification data points.
+        New description: {output}
+        Does the new description require at least two distinct pieces of identifying information?
+    - id: functional_correctness
+      weight: 0.35
+      prompt: |
+        c1: agent only asked "What's your name?" — a single data point — GT=No (insufficient verification).
+        New description: {output}
+        Does the new description explicitly require TWO or more pieces of identifying information? Score 1.0 if the criteria clearly require multiple distinct verification items. Score 0 if a single confirmation (name only) could still satisfy the criteria.
+    - id: generalisation
+      weight: 0.25
+      prompt: |
+        New description: {output}
+        Does the description accept multiple valid verification combinations (name+DOB, name+PIN, etc.) without being over-specific to one combination?
+    - id: format_compliance
+      weight: 0.15
+      prompt: |
+        New description: {output}
+        Does it follow the METRIC_NAME / SPEAKER / ACTION / PASS_LOGIC / PASS_CRITERIA / EXAMPLES structure?
+  pass_threshold: 0.70

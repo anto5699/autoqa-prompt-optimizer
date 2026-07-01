@@ -1,0 +1,79 @@
+id: opt-narrow-001
+description: "Too-narrow description + RCA identifying exact-phrase issue; optimizer must broaden PASS_CRITERIA"
+node: prompt_optimizer
+failure_mode: too_narrow
+
+rule:
+  rule_id: ClosingGreeting
+  rule_type: answer
+  speaker: Agent
+  evaluation_type: entire
+  n_messages: -1
+  description: |
+    METRIC_NAME: Closing Greeting
+    SPEAKER: Agent
+    ACTION: Closes the call by asking if the customer needs anything else
+    PASS_LOGIC: ALL
+    PASS_CRITERIA:
+    1. Agent says the exact phrase "Is there anything else I can help you with today?"
+    EXAMPLES:
+    PASS:
+    1. "Is there anything else I can help you with today?"
+    FAIL:
+    1. "Thank you, goodbye."
+
+rca_findings: |
+  Root cause: The PASS_CRITERIA require the exact phrase "Is there anything else I can help you with today?"
+  This is too narrow. The ground truth rewards any polite closing question that invites further assistance,
+  regardless of exact wording. Agents using semantically equivalent phrases ("Any other questions?",
+  "Is there something else I can assist with?") are incorrectly marked as non-adherent.
+  Recommendation: Replace the exact-phrase criterion with a semantic requirement that captures any
+  polite invitation for further assistance.
+
+conversations:
+  - id: c1
+    transcript:
+      - {speaker: agent, msg: "Is there anything else I can assist you with?"}
+      - {speaker: customer, msg: "No thanks."}
+    ground_truth: "Yes"
+    prediction: "No"
+  - id: c2
+    transcript:
+      - {speaker: agent, msg: "Any other questions for me today?"}
+      - {speaker: customer, msg: "Nope, all good."}
+    ground_truth: "Yes"
+    prediction: "No"
+
+correct_conversations:
+  - id: c3
+    transcript:
+      - {speaker: agent, msg: "Is there anything else I can help you with today?"}
+      - {speaker: customer, msg: "No, that's all."}
+    ground_truth: "Yes"
+    prediction: "Yes"
+
+judge:
+  dimensions:
+    - id: improvement_direction
+      weight: 0.25
+      prompt: |
+        Original description requires exact phrase. RCA says to broaden to any polite closing question.
+        New description: {output}
+        Does the new description replace the exact-phrase requirement with a semantic criterion that accepts equivalent phrasings?
+    - id: functional_correctness
+      weight: 0.35
+      prompt: |
+        c1 (agent: "Is there anything else I can assist you with?") and c2 ("Any other questions for me today?") were previously failing (pred=No, GT=Yes).
+        New description: {output}
+        Would an LLM evaluator using this new description correctly classify c1 and c2 as "Yes" (adhered)?
+    - id: generalisation
+      weight: 0.25
+      prompt: |
+        New description: {output}
+        Does the description remain general enough to handle other equivalent closing phrases an agent might use, beyond just the two examples given?
+    - id: format_compliance
+      weight: 0.15
+      prompt: |
+        New description: {output}
+        Does the description follow the structured format with METRIC_NAME, SPEAKER, ACTION, PASS_LOGIC, PASS_CRITERIA, and EXAMPLES sections?
+  pass_threshold: 0.70

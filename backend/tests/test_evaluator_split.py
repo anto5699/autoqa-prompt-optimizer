@@ -70,7 +70,9 @@ async def test_v2_result_uses_justification_as_rationale():
     conv_id, results = await _evaluate_conversation(
         CONV, records, "V1_PROMPT", "V2_PROMPT", "en", mock_llm, sem, batch_size=6
     )
-    pred_update = next((r for r in results if "empathy" in str(r)), {})
+    pred_update = next((r for r in results if r.get("_id") == "empathy"), {})
     # V2 verdict: isQualified=false → "No"
-    # (check via full evaluator state update in integration, here verify no crash)
     assert conv_id == "c1"
+    # justification field must be surfaced as the rationale
+    assert len(pred_update.get("rationale", "")) > 0
+    assert "Agent did not listen to customer concern." in pred_update.get("rationale", "")

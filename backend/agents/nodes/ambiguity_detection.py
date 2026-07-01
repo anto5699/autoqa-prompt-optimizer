@@ -77,23 +77,26 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
     all_questions: list[ClarifyingQuestion] = []
 
     system_prompt = state["system_prompt"]
+    system_prompt_v2 = state.get("system_prompt_v2", "")
 
     for rule in state["rules"]:
         if len(all_questions) >= _MAX_TOTAL_QUESTIONS:
             break
 
+        active_system_prompt = system_prompt_v2 if rule.get("version") == "v2" else system_prompt
+
         if rule["rule_type"] == "dynamic":
             trigger_rule = {**rule, "rule_type": "trigger", "description": rule.get("trigger_description", "")}
-            trigger_qs = await _analyse_rule(trigger_rule, system_prompt, llm)
+            trigger_qs = await _analyse_rule(trigger_rule, active_system_prompt, llm)
             remaining = _MAX_TOTAL_QUESTIONS - len(all_questions)
             all_questions.extend(trigger_qs[:min(1, remaining)])
 
             if len(all_questions) < _MAX_TOTAL_QUESTIONS:
-                answer_qs = await _analyse_rule(rule, system_prompt, llm)
+                answer_qs = await _analyse_rule(rule, active_system_prompt, llm)
                 remaining = _MAX_TOTAL_QUESTIONS - len(all_questions)
                 all_questions.extend(answer_qs[:min(1, remaining)])
         else:
-            questions = await _analyse_rule(rule, system_prompt, llm)
+            questions = await _analyse_rule(rule, active_system_prompt, llm)
             remaining = _MAX_TOTAL_QUESTIONS - len(all_questions)
             all_questions.extend(questions[:min(_MAX_QUESTIONS_PER_RULE, remaining)])
 

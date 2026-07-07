@@ -155,6 +155,13 @@ async def finalize(state: OptimizationState) -> dict:
         regressed = initial_acc is not None and final_acc < initial_acc
 
         is_dynamic = record.get("rule_type") == "dynamic"
+        pivot_approved = rule_id in (state.get("pivot_approved_rules") or [])
+        pivot_info = None
+        if pivot_approved:
+            pivot_info = {
+                "reason": record.get("alignment_audit") or "",
+                "original_description": record.get("original_description") or "",
+            }
         parameters_report[rule_id] = {
             "status": record["status"],
             "rule_type": record.get("rule_type", "answer"),
@@ -184,6 +191,8 @@ async def finalize(state: OptimizationState) -> dict:
             "regression_warning": _build_regression_warning(record, initial_acc, final_acc) if regressed else None,
             "recommendations": _build_recommendations(record),
             "conversation_results": conversation_results,
+            "pivot_approved": pivot_approved,
+            "pivot_info": pivot_info,
         }
 
     # Generate plain-language report summaries for every parameter in parallel

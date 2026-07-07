@@ -26,6 +26,11 @@ class ConversationResult(BaseModel):
     correct: Optional[bool] = None
 
 
+class PivotInfo(BaseModel):
+    reason: str
+    original_description: str
+
+
 class ParameterReport(BaseModel):
     status: str
     version: Optional[str] = None
@@ -46,6 +51,8 @@ class ParameterReport(BaseModel):
     regression_warning: Optional[Dict[str, Any]] = None
     recommendations: List[str]
     conversation_results: List[Dict[str, Any]] = Field(default_factory=list)
+    pivot_approved: bool = False
+    pivot_info: Optional[PivotInfo] = None
 
 
 class ReportSummary(BaseModel):

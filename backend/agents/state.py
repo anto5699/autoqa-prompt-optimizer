@@ -51,6 +51,7 @@ class ClarifyingQuestion(TypedDict, total=False):
     question_text: str
     rationale: str
     clarification_forced: bool  # True when forced as fallback; False/absent for LLM-generated
+    question_type: str  # "ambiguity" (default) | "pivot"
 
 
 class OptimizationState(TypedDict):
@@ -69,6 +70,8 @@ class OptimizationState(TypedDict):
     user_answers: Dict[str, str]
     clarification_complete: bool
     clarified_rule_ids: List[str]
+    pivot_asked_rule_ids: List[str]   # rules that received a pivot (logic-replace) question
+    pivot_approved_rules: List[str]   # rules where user approved discarding current description logic
 
     current_iteration: int
     max_iterations: int

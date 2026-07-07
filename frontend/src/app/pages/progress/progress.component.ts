@@ -100,9 +100,23 @@ const PIPELINE = [
                 <span *ngIf="ruleTypeBadge(q.parameter_name)" class="q-rule-type">{{ ruleTypeBadge(q.parameter_name) }}</span>
               </div>
               <div class="q-text">{{ q.question_text }}</div>
-              <textarea class="q-input" rows="3" placeholder="Your answer…"
-                [value]="pendingAnswers[q.question_id] || ''"
-                (input)="setAnswer(q.question_id, $event)"></textarea>
+              <ng-container *ngIf="q.question_type === 'pivot'; else freeText">
+                <div class="pivot-options">
+                  <label class="pivot-option">
+                    <input type="radio" [name]="'pivot-' + q.question_id"
+                           value="Yes" (change)="setAnswerStr(q.question_id, 'Yes')"> Yes, replace the logic
+                  </label>
+                  <label class="pivot-option">
+                    <input type="radio" [name]="'pivot-' + q.question_id"
+                           value="No" (change)="setAnswerStr(q.question_id, 'No')"> No, keep refining
+                  </label>
+                </div>
+              </ng-container>
+              <ng-template #freeText>
+                <textarea class="q-input" rows="3" placeholder="Your answer…"
+                  [value]="pendingAnswers[q.question_id] || ''"
+                  (input)="setAnswer(q.question_id, $event)"></textarea>
+              </ng-template>
             </div>
             <button class="btn-clarify" [disabled]="!allAnswered()" (click)="submitClarification()">
               Submit &amp; Continue
@@ -298,6 +312,10 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   setAnswer(questionId: string, event: Event) {
     this.pendingAnswers[questionId] = (event.target as HTMLTextAreaElement).value;
+  }
+
+  setAnswerStr(questionId: string, value: string) {
+    this.pendingAnswers[questionId] = value;
   }
 
   allAnswered(): boolean {

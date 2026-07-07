@@ -186,6 +186,23 @@ type FilterKey = 'all' | 'converged' | 'not-met';
             <pre class="report-summary-text">{{ entry.val.report_summary }}</pre>
           </div>
 
+          <!-- Pivot report -->
+          <div *ngIf="entry.val.pivot_approved && entry.val.pivot_info" class="pivot-report-card">
+            <div class="pivot-report-title">Description Logic Pivot</div>
+            <div class="pivot-report-section">
+              <div class="pivot-report-label">Why the pivot was needed</div>
+              <pre class="pivot-report-text">{{ entry.val.pivot_info?.reason }}</pre>
+            </div>
+            <div class="pivot-report-section">
+              <div class="pivot-report-label">Original input description</div>
+              <pre class="pivot-report-text">{{ entry.val.pivot_info?.original_description }}</pre>
+            </div>
+            <div class="pivot-report-section">
+              <div class="pivot-report-label">Final description after pivot</div>
+              <pre class="pivot-report-text">{{ entry.val.final_prompt }}</pre>
+            </div>
+          </div>
+
           <!-- Optimization notes -->
           <p *ngIf="entry.val.optimization_notes" class="opt-notes">
             <strong>Changes made: </strong>{{ entry.val.optimization_notes }}

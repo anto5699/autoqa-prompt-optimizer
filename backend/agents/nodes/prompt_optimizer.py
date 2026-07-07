@@ -162,12 +162,15 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
     total_rules = len(below_target)
     session_store.update(session_id, {"node_progress": {"node": "optimizing_prompts", "step": 0, "total": total_rules}})
 
+    pivot_approved_rules = set(state.get("pivot_approved_rules") or [])
+
     for idx, rule_id in enumerate(below_target):
         record = records[rule_id]
 
         session_store.append_log(session_id, f"Optimising description for {rule_id} (iteration {iteration + 1})…")
 
         rule_answers = {qid: ans for qid, ans in user_answers.items() if qid_to_param.get(qid) == rule_id}
+        pivot_approved = rule_id in pivot_approved_rules
 
         is_dynamic_v1 = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
         if is_dynamic_v1:
@@ -179,8 +182,8 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
                 "current_description": record.get("trigger_description") or "",
                 "speaker": record.get("trigger_speaker") or "customer",
             }
-            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id)
-            new_description = await _optimise_description(record, rule_answers, llm, session_id)
+            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id, pivot_approved=False)
+            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved)
             records[rule_id] = {
                 **record,
                 "current_description": new_description,
@@ -190,7 +193,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
             }
         else:
             # Single description optimisation: covers V1 static and all V2 records
-            new_description = await _optimise_description(record, rule_answers, llm, session_id)
+            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved)
             records[rule_id] = {
                 **record,
                 "current_description": new_description,
@@ -240,19 +243,37 @@ def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     return (max(recent) - min(recent)) < 0.03
 
 
-async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str) -> str:
+async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str, *, pivot_approved: bool = False) -> str:
     trajectory = _accuracy_trajectory(record)
     stagnant = _is_stagnant(record)
+    alignment_audit = record.get("alignment_audit")
 
-    if stagnant:
+    if pivot_approved and alignment_audit:
+        rewrite_instruction = (
+            "⚠ The user has approved discarding the current description logic. "
+            "Write a completely fresh V2 Unified Criteria description based ONLY on the revised "
+            "optimization strategy from the GT alignment audit below. Do not preserve any wording, "
+            "CONDITION, or EXPECTED BEHAVIOR from the current description.\n\n"
+            f"GT alignment audit:\n{alignment_audit}"
+        )
+        alignment_block = ""
+    elif stagnant:
         rewrite_instruction = (
             "You MUST make a fundamentally different change — rewrite the CONDITION, EXPECTED BEHAVIOR, "
             "or EXCEPTION from a completely different angle. Do NOT make small edits to the current wording."
+        )
+        alignment_block = (
+            f"Ground truth alignment audit (use to understand WHAT needs to change):\n{alignment_audit}\n\n"
+            if alignment_audit else ""
         )
     else:
         rewrite_instruction = (
             "Rewrite the description in V2 Unified Criteria format to address the identified failure patterns. "
             "Keep YES/NO/NA semantics intact — do not change CONDITION/EXCEPTION logic unless RCA explicitly requires it."
+        )
+        alignment_block = (
+            f"Ground truth alignment audit (use to understand WHAT needs to change):\n{alignment_audit}\n\n"
+            if alignment_audit else ""
         )
 
     v2_constraints = (
@@ -276,6 +297,7 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
         f"Current description:\n{record['current_description']}\n\n"
         f"Root cause analysis:\n{record.get('rca_findings', 'Not available')}\n"
         f"{f'Accuracy trajectory: {trajectory}' if trajectory else ''}\n"
+        f"{alignment_block}"
         f"{answers_block}\n\n"
         f"{v2_constraints}\n"
         f"{rewrite_instruction}\n\n"
@@ -293,10 +315,10 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
 
 
 async def _optimise_description(
-    record: dict, user_answers: dict, llm: BaseChatModel, session_id: str
+    record: dict, user_answers: dict, llm: BaseChatModel, session_id: str, *, pivot_approved: bool = False
 ) -> str:
     if record.get("version") == "v2":
-        return await _optimise_description_v2(record, user_answers, llm, session_id)
+        return await _optimise_description_v2(record, user_answers, llm, session_id, pivot_approved=pivot_approved)
     # V1 path continues unchanged below
     rule_type = record["rule_type"]
     clarifications = "\n".join(f"- {v}" for v in user_answers.values()) if user_answers else "None"
@@ -352,12 +374,22 @@ async def _optimise_description(
         )
 
     alignment_audit = record.get("alignment_audit")
-    alignment_block = (
-        f"Ground truth alignment audit (systemic gaps between the description logic and what "
-        f"ground truth actually rewards — use this to understand WHAT needs to change, not just HOW):\n"
-        f"{alignment_audit}\n\n"
-        if alignment_audit else ""
-    )
+    if pivot_approved and alignment_audit:
+        alignment_block = (
+            "⚠ The user has approved discarding the current description logic. "
+            "Write a completely fresh description based ONLY on the revised optimization "
+            "strategy from the GT alignment audit below. Do not preserve any wording or "
+            "criteria from the current description.\n\n"
+            f"GT alignment audit:\n{alignment_audit}\n\n"
+        )
+    elif alignment_audit:
+        alignment_block = (
+            f"Ground truth alignment audit (systemic gaps between the description logic and what "
+            f"ground truth actually rewards — use this to understand WHAT needs to change, not just HOW):\n"
+            f"{alignment_audit}\n\n"
+        )
+    else:
+        alignment_block = ""
 
     prompt = (
         f"Rule ID: {record['rule_id']}\n"

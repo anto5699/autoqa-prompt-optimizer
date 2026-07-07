@@ -128,6 +128,34 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
         questions.append(question)
         newly_clarified.append(rule_id)
 
+    # --- Pivot questions: ask user to approve replacing description logic for DESCRIPTION_MISMATCH ---
+    pivot_asked = set(state.get("pivot_asked_rule_ids", []))
+    newly_pivot_asked: list[str] = []
+    existing_approved = set(state.get("pivot_approved_rules", []))
+
+    for rule_id in below_target:
+        if rule_id in pivot_asked:
+            continue
+        record = records.get(rule_id, {})
+        audit = record.get("alignment_audit", "") or ""
+        if "DESCRIPTION_MISMATCH" not in audit:
+            continue
+        display_name = rule_id.replace("__answer", "").replace("__trigger", "")
+        pivot_q = ClarifyingQuestion(
+            question_id=str(uuid.uuid4()),
+            parameter_name=rule_id,
+            question_text=(
+                f"For '{display_name}', our analysis found that the current description logic "
+                f"does not match how this metric was labelled in your data. The ground truth "
+                f"suggests a different evaluation approach. Would you like to discard the current "
+                f"description and rewrite it from scratch based on what the ground truth data shows?"
+            ),
+            rationale="GT alignment audit found DESCRIPTION_MISMATCH — description logic contradicts ground truth.",
+            question_type="pivot",
+        )
+        questions.append(pivot_q)
+        newly_pivot_asked.append(rule_id)
+
     if not questions:
         return {}
 
@@ -146,11 +174,20 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
     new_answers = resume_data.get("user_answers", {}) if isinstance(resume_data, dict) else {}
     merged_answers = {**existing_answers, **new_answers}
 
+    newly_approved: list[str] = []
+    for q in questions:
+        if q.get("question_type") == "pivot":
+            answer = new_answers.get(q["question_id"], "").strip().lower()
+            if answer.startswith("y"):
+                newly_approved.append(q["parameter_name"])
+
     return {
         "user_answers": merged_answers,
         "clarifying_questions": questions,
         "clarification_complete": True,
         "clarified_rule_ids": list(clarified | set(newly_clarified)),
+        "pivot_asked_rule_ids": list(pivot_asked | set(newly_pivot_asked)),
+        "pivot_approved_rules": list(existing_approved | set(newly_approved)),
         "current_phase": "optimizing_prompts",
     }
 

@@ -35,6 +35,7 @@ export interface ClarifyingQuestion {
   parameter_name: string;
   question_text: string;
   rationale: string;
+  question_type?: string;  // "ambiguity" | "pivot"
 }
 
 export interface ParameterSummary {

@@ -38,6 +38,11 @@ export interface ParameterReport {
   recommendations: string[];
   conversation_results: ConversationResult[];
   version?: string;
+  pivot_approved?: boolean;
+  pivot_info?: {
+    reason: string;
+    original_description: string;
+  };
 }
 
 export interface ReportSummary {

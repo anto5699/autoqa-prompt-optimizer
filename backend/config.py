@@ -204,14 +204,20 @@ def get_llm(model: str = None, api_key: str = None, base_url: str = None, purpos
 
     from langchain_openai import ChatOpenAI
 
+    # Reasoning models (o1/o3/o4 family) reject temperature/top_p/penalty params
+    is_reasoning_model = re.match(r"^o[134]", effective_model or "")
+    extra_params = {} if is_reasoning_model else {
+        "temperature": 0,
+        "top_p": 1,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+    }
+
     return ChatOpenAI(
         model=effective_model,
-        temperature=0,
-        top_p=1,
-        frequency_penalty=0,
-        presence_penalty=0,
         max_completion_tokens=15000,
         timeout=180,
         api_key=api_key or settings.openai_api_key or None,
         base_url=effective_base_url,
+        **extra_params,
     )

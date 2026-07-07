@@ -126,10 +126,9 @@ const POST_AMBIGUITY_PHASES = new Set([
                   [(ngModel)]="ms.answerDescription"
                   placeholder="Describe what the agent must say or do to pass this evaluation…"
                   rows="2"
-                  maxlength="300"
                   [class.filled]="ms.answerDescription?.trim()">
                 </textarea>
-                <div class="char-count">{{ (ms.answerDescription || '').length }}/300</div>
+                <div class="char-count">{{ (ms.answerDescription || '').length }} chars</div>
               </div>
             </ng-container>
 

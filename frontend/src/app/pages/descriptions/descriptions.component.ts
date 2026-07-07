@@ -140,10 +140,9 @@ const POST_AMBIGUITY_PHASES = new Set([
                   [(ngModel)]="ms.answerDescription"
                   placeholder="CONDITION: ...&#10;EXPECTED BEHAVIOR:&#10;  - ...&#10;EXCEPTION: ..."
                   rows="8"
-                  maxlength="1000"
                   [class.filled]="ms.answerDescription?.trim()">
                 </textarea>
-                <div class="char-count">{{ (ms.answerDescription || '').length }}/1000</div>
+                <div class="char-count">{{ (ms.answerDescription || '').length }} chars</div>
               </div>
 
               <div class="desc-field">

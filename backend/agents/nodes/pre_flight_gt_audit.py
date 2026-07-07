@@ -71,6 +71,11 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
                 "session=%s rule_id=%s pre-flight audit skipped (insufficient GT samples: %d yes, %d no)",
                 session_id, rule_id, len(yes_cases), len(no_cases),
             )
+            session_store.append_log(
+                session_id,
+                f"  Pre-flight audit: {rule_id} — skipped "
+                f"(need ≥2 Yes and ≥2 No GT examples; found {len(yes_cases)} Yes, {len(no_cases)} No)",
+            )
             return rule_id, None
 
         async with sem:

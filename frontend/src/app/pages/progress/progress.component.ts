@@ -168,6 +168,18 @@ const PIPELINE = [
               <pre class="rca-text">{{ p.rca_findings }}</pre>
             </div>
           </div>
+
+          <div *ngIf="auditParams.length" class="audit-panel">
+            <div class="audit-panel-title">Ground Truth Alignment Audit</div>
+            <div *ngFor="let p of auditParams" class="audit-item">
+              <div class="audit-item-header">
+                <code class="acc-rule-id">{{ cleanParamName(p.rule_id) }}</code>
+                <span *ngIf="ruleTypeBadge(p.rule_id)" class="q-rule-type">{{ ruleTypeBadge(p.rule_id) }}</span>
+                <span class="audit-iteration-badge">Iteration {{ p.audit_iteration }}</span>
+              </div>
+              <pre class="audit-text">{{ p.alignment_audit }}</pre>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -177,7 +189,7 @@ const PIPELINE = [
 export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   phase = 'ingesting';
   log: string[] = [];
-  params: { rule_id: string; accuracy: number; status: string; rca_findings?: string }[] = [];
+  params: { rule_id: string; accuracy: number; status: string; rca_findings?: string; alignment_audit?: string; audit_iteration?: number }[] = [];
   iteration = 0;
   error = '';
   resuming = false;
@@ -224,6 +236,10 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     ) as { rule_id: string; accuracy: number; status: string; rca_findings: string }[];
   }
 
+  get auditParams(): { rule_id: string; accuracy: number; status: string; alignment_audit: string; audit_iteration: number }[] {
+    return this.params.filter(p => p.alignment_audit) as { rule_id: string; accuracy: number; status: string; alignment_audit: string; audit_iteration: number }[];
+  }
+
   ngOnInit() {
     this.sessionId = this.route.snapshot.params['sessionId'];
 
@@ -252,6 +268,7 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.iteration = s.current_iteration;
           this.params = Object.entries(s.parameter_summary).map(([rule_id, v]) => ({
             rule_id, accuracy: v.accuracy, status: v.status, rca_findings: v.rca_findings,
+            alignment_audit: v.alignment_audit, audit_iteration: v.audit_iteration,
           }));
           this.nodeProgress = s.node_progress ?? null;
           if (s.current_phase === 'awaiting_clarification' && !this.awaitingResume) {

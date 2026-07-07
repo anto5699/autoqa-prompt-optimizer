@@ -29,6 +29,8 @@ class ParameterSummary(BaseModel):
     accuracy: float
     status: str
     rca_findings: Optional[str] = None
+    alignment_audit: Optional[str] = None
+    audit_iteration: Optional[int] = None
 
 
 class NodeProgress(BaseModel):

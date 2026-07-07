@@ -41,6 +41,8 @@ export interface ParameterSummary {
   accuracy: number;
   status: string;
   rca_findings?: string;
+  alignment_audit?: string;
+  audit_iteration?: number;
 }
 
 export interface CreateSessionResponse {

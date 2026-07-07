@@ -245,6 +245,8 @@ async def get_session(session_id: str) -> SessionStatusResponse:
             accuracy=record.get("current_accuracy", 0.0),
             status=record.get("status", "pending"),
             rca_findings=record.get("rca_findings"),
+            alignment_audit=record.get("alignment_audit"),
+            audit_iteration=record.get("audit_iteration"),
         )
 
     na_detected = set(session.get("_na_detected_parameters", []))

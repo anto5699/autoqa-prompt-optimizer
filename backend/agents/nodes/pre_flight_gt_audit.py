@@ -96,13 +96,7 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
             pivot_questions.append(ClarifyingQuestion(
                 question_id=str(uuid.uuid4()),
                 parameter_name=rule_id,
-                question_text=(
-                    f"Pre-flight GT audit found a logic mismatch for '{display_name}'.\n\n"
-                    f"{findings}\n\n"
-                    f"Would you like to rewrite the description from scratch based on what your GT data "
-                    f"actually rewards? If yes, optimization will start with the correct logic from "
-                    f"the very first iteration."
-                ),
+                question_text=_format_pivot_question(display_name, findings),
                 rationale=(
                     "Pre-flight GT audit found DESCRIPTION_MISMATCH — description logic contradicts "
                     "ground truth before optimization begins."
@@ -162,6 +156,57 @@ def _extract_gap_type(findings: str) -> str:
     return "UNKNOWN"
 
 
+def _extract_section(findings: str, prefix: str) -> str:
+    """Extract a single-line section value from the structured findings text."""
+    for line in findings.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    return ""
+
+
+def _format_pivot_question(display_name: str, findings: str) -> str:
+    """Build a compact, human-readable pivot question from structured findings."""
+    desc_evaluates = _extract_section(findings, "What the description evaluates:")
+    gt_rewards = _extract_section(findings, "What GT data rewards:")
+
+    gaps_lines = []
+    in_gaps = False
+    for line in findings.split("\n"):
+        stripped = line.strip()
+        if stripped == "Alignment gaps:":
+            in_gaps = True
+            continue
+        if in_gaps:
+            if stripped == "" or stripped.startswith("Revised"):
+                break
+            if stripped.startswith("•"):
+                gaps_lines.append(stripped)
+    gap_text = "\n".join(gaps_lines) if gaps_lines else "• (none)"
+
+    strategy_lines = []
+    in_strategy = False
+    for line in findings.split("\n"):
+        stripped = line.strip()
+        if stripped == "Revised optimization strategy:":
+            in_strategy = True
+            continue
+        if in_strategy and stripped:
+            strategy_lines.append(stripped)
+            break
+    strategy_text = strategy_lines[0] if strategy_lines else "(no strategy)"
+
+    return (
+        f"Pre-flight GT audit: DESCRIPTION_MISMATCH for '{display_name}'\n\n"
+        f"Description evaluates:  {desc_evaluates}\n"
+        f"GT actually rewards:    {gt_rewards}\n\n"
+        f"Gap:\n{gap_text}\n\n"
+        f"Suggested rewrite direction:\n{strategy_text}\n\n"
+        f"Rewrite this description from scratch based on what your GT data actually rewards?\n"
+        f"If yes, optimization starts with the correct logic from iteration 1."
+    )
+
+
 async def _run_audit(rule_id: str, rule: dict, yes_cases: list, no_cases: list, llm) -> str:
     yes_text = "\n\n".join(
         f"[Y{i + 1}] Conversation {c['conversation_id']}:\n{_format_transcript(c['transcript'])}"
@@ -182,18 +227,16 @@ async def _run_audit(rule_id: str, rule: dict, yes_cases: list, no_cases: list, 
         f"{yes_text}\n\n"
         f"NO examples — conversations where the agent did NOT ADHERE (labelled 'No' in ground truth):\n"
         f"{no_text}\n\n"
-        "Based on these examples:\n"
-        "1. What behaviour or criterion actually distinguishes the 'Yes' from 'No' conversations?\n"
-        "2. Does this match what the description says should be evaluated?\n"
-        "3. If there is a mismatch, describe it specifically.\n\n"
-        "Respond using this EXACT format:\n\n"
+        "Identify the single clearest criterion that separates the Yes examples from the No examples. "
+        "Then check whether the description matches that criterion.\n\n"
+        "Respond using this EXACT format — be concise, one short phrase or sentence per field:\n\n"
         "Gap type: <LABELLING_INCONSISTENCY | NO_GAP | DESCRIPTION_MISMATCH>\n\n"
-        "What the description evaluates: <one sentence>\n"
-        "What GT data rewards: <one sentence based on what distinguishes Yes from No examples>\n\n"
+        "What the description evaluates: <one short phrase, max 12 words>\n"
+        "What GT data rewards: <one short phrase, max 12 words>\n\n"
         "Alignment gaps:\n"
-        "• <specific gap, or None.>\n\n"
+        "• <one sentence max 25 words — or 'None.' if NO_GAP or LABELLING_INCONSISTENCY>\n\n"
         "Revised optimization strategy:\n"
-        "<One concrete instruction if DESCRIPTION_MISMATCH, or 'No changes needed.' if NO_GAP or LABELLING_INCONSISTENCY>"
+        "<one sentence max 30 words — or 'No changes needed.' if NO_GAP or LABELLING_INCONSISTENCY>"
     )
 
     response = await llm.ainvoke([

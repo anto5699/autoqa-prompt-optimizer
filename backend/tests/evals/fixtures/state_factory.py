@@ -105,6 +105,8 @@ def build_state(scenario: dict) -> OptimizationState:
             "best_accuracy": accuracy if not is_e2e else None,
             "best_description": rule["description"],
             "best_trigger_description": rule.get("trigger_description"),
+            "best_predictions": dict(current_predictions),
+            "best_rationales": {},
             "original_description": rule["description"],
         }
         parameter_records[rule_id] = record

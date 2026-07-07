@@ -39,6 +39,8 @@ class RuleRecord(TypedDict):
     best_accuracy: Optional[float]
     best_description: Optional[str]
     best_trigger_description: Optional[str]
+    best_predictions: Optional[Dict[str, str]]
+    best_rationales: Optional[Dict[str, str]]
     original_description: Optional[str]
 
 

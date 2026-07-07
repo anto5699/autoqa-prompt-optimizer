@@ -243,6 +243,13 @@ def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
     return (max(recent) - min(recent)) < 0.03
 
 
+def _is_regressing(record: dict) -> bool:
+    history = record.get("iteration_history", [])
+    if len(history) < 2:
+        return False
+    return history[-1]["accuracy"] < history[-2]["accuracy"]
+
+
 async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str, *, pivot_approved: bool = False) -> str:
     trajectory = _accuracy_trajectory(record)
     stagnant = _is_stagnant(record)
@@ -257,6 +264,20 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
             f"GT alignment audit:\n{alignment_audit}"
         )
         alignment_block = ""
+    elif _is_regressing(record):
+        _h = record.get("iteration_history", [])
+        rewrite_instruction = (
+            f"⚠ REGRESSION: The last optimization attempt made accuracy worse "
+            f"({_h[-2]['accuracy']:.0%} → {_h[-1]['accuracy']:.0%}). "
+            "Make the MINIMUM targeted change needed to address the single clearest pattern in the RCA. "
+            "Do NOT restructure CONDITION, EXPECTED BEHAVIOR, or EXCEPTION unless the RCA explicitly "
+            "identifies that section as the root cause. "
+            "If the RCA finding is uncertain, output the current description unchanged."
+        )
+        alignment_block = (
+            f"Ground truth alignment audit (use to understand WHAT needs to change):\n{alignment_audit}\n\n"
+            if alignment_audit else ""
+        )
     elif stagnant:
         rewrite_instruction = (
             "You MUST make a fundamentally different change — rewrite the CONDITION, EXPECTED BEHAVIOR, "
@@ -349,6 +370,16 @@ async def _optimise_description(
             "or revise EXAMPLES to illustrate the one edge case identified in the RCA. If the "
             "RCA finds no actionable change, output the full description unchanged in the "
             "structured format."
+        )
+    elif _is_regressing(record):
+        _h = record.get("iteration_history", [])
+        rewrite_instruction = (
+            f"⚠ REGRESSION: The last optimization attempt made accuracy worse "
+            f"({_h[-2]['accuracy']:.0%} → {_h[-1]['accuracy']:.0%}). "
+            "Make the MINIMUM targeted change needed to address the single clearest pattern in the RCA. "
+            "Do NOT restructure, reorder, or rephrase PASS_CRITERIA that were not directly identified "
+            "as failure causes. Do NOT change PASS_LOGIC unless the RCA explicitly identifies it as the root cause. "
+            "If the RCA finding is uncertain, output the current description unchanged."
         )
     elif _is_stagnant(record):
         rewrite_instruction = (

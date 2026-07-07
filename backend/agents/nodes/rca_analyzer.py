@@ -9,6 +9,8 @@ from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
 
+_MAX_CORRECT_SAMPLES = 3
+
 _SYSTEM = (
     "You are an expert QA rule analyst. Analyse evaluation errors to identify root causes "
     "in the rule description that cause misclassification. Be specific and actionable."
@@ -55,7 +57,14 @@ async def rca_analyzer(state: OptimizationState) -> dict:
             conversations_by_id,
             version=record.get("version", "v1"),
         )
-        findings = await _run_rca(rule_id, record, error_cases, session_id, llm)
+        correct_cases = _collect_correct_cases(
+            rule_id,
+            record["current_predictions"],
+            record.get("current_rationales", {}),
+            ground_truth_map,
+            conversations_by_id,
+        )
+        findings = await _run_rca(rule_id, record, error_cases, correct_cases, session_id, llm)
         records[rule_id] = {**record, "rca_findings": findings}
         logger.info("session=%s rule_id=%s RCA complete", session_id, rule_id)
         session_store.set_node_progress(session_id, "analyzing_failures", idx + 1, total_rules)
@@ -112,6 +121,33 @@ def _collect_error_cases(
     return errors
 
 
+def _collect_correct_cases(
+    rule_id: str,
+    predictions: dict,
+    rationales: dict,
+    ground_truth_map: dict,
+    conversations_by_id: dict,
+) -> list[dict]:
+    cases = []
+    for conv_id, gt_by_rule in ground_truth_map.items():
+        gt = gt_by_rule.get(rule_id)
+        if gt == "NA" or gt is None:
+            continue
+        pred = predictions.get(conv_id)
+        if pred == gt:
+            conv = conversations_by_id.get(conv_id, {})
+            cases.append({
+                "conversation_id": conv_id,
+                "ground_truth": gt,
+                "prediction": pred,
+                "rationale": rationales.get(conv_id, ""),
+                "transcript": conv.get("transcript", []),
+            })
+            if len(cases) >= _MAX_CORRECT_SAMPLES:
+                break
+    return cases
+
+
 def _format_transcript(messages: list[dict]) -> str:
     lines = []
     for m in messages[:_MAX_TRANSCRIPT_MESSAGES]:
@@ -124,7 +160,7 @@ def _format_transcript(messages: list[dict]) -> str:
 
 
 async def _run_rca(
-    rule_id: str, record: dict, error_cases: list[dict], session_id: str, llm
+    rule_id: str, record: dict, error_cases: list[dict], correct_cases: list[dict], session_id: str, llm
 ) -> str:
     rule_type = record["rule_type"]
     version = record.get("version", "v1")
@@ -196,6 +232,19 @@ async def _run_rca(
         for i, e in enumerate(error_cases)
     )
 
+    correct_cases_block = ""
+    if correct_cases:
+        correct_text = "\n\n".join(
+            f"[C{i+1}] Ground truth: {c['ground_truth']} | Prediction: {c['prediction']}\n"
+            f"Evaluator's stated reason: {c['rationale'] or '(none provided)'}\n"
+            f"Transcript:\n{_format_transcript(c['transcript'])}"
+            for i, c in enumerate(correct_cases)
+        )
+        correct_cases_block = (
+            f"Correctly classified cases — evidence of what IS working in the current wording "
+            f"({len(correct_cases)} shown):\n{correct_text}\n\n"
+        )
+
     history = record.get("iteration_history", [])
     trajectory_str = (
         "Accuracy trajectory: " + " → ".join(f"{h['accuracy']:.0%}" for h in history) + "\n\n"
@@ -209,7 +258,11 @@ async def _run_rca(
         f"{description_section}"
         f"{trajectory_str}"
         f"Error classification:\n{error_labels_str}\n\n"
-        f"Error cases ({len(error_cases)} shown):\n{cases_text}\n\n"
+        f"{correct_cases_block}"
+        f"Incorrectly classified cases — evidence of what is failing ({len(error_cases)} shown):\n{cases_text}\n\n"
+        "Use the contrast between correctly and incorrectly classified cases to identify the exact "
+        "criterion or phrasing boundary responsible for the errors — not just what the failing cases "
+        "have in common in isolation.\n\n"
         "The evaluator's stated reason shows how the wording was interpreted. "
         "Treat it as evidence of the interpretation, not as a confirmed cause — "
         "cross-check it against the transcript.\n\n"

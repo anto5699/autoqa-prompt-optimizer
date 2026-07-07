@@ -40,26 +40,40 @@ async def benchmarking(state: OptimizationState) -> dict:
             best_accuracy = new_accuracy
             best_description = record["current_description"]
             best_trigger_description = record.get("trigger_description")
+            best_predictions = dict(record.get("current_predictions") or {})
+            best_rationales = dict(record.get("current_rationales") or {})
         else:
             initial_accuracy = record["initial_accuracy"]
             best_accuracy = record["best_accuracy"] if record["best_accuracy"] is not None else record["initial_accuracy"]
             best_description = record["best_description"] if record["best_description"] is not None else record["current_description"]
             best_trigger_description = record.get("best_trigger_description") or record.get("trigger_description")
+            best_predictions = dict(record.get("best_predictions") or {})
+            best_rationales = dict(record.get("best_rationales") or {})
 
-        # Regression guard: revert description(s) if this iteration was worse than best
+        # Regression guard: revert description(s) and predictions if this iteration was worse than best
         if new_accuracy < best_accuracy and record.get("initial_accuracy") is not None:
             current_description = best_description
             current_trigger_description = best_trigger_description
+            current_predictions = best_predictions
+            current_rationales = best_rationales
             logger.info(
-                "session=%s rule_id=%s regression detected (%.2f < %.2f) — reverting description",
+                "session=%s rule_id=%s regression detected (%.2f < %.2f) — reverting description and predictions",
                 state["session_id"], rule_id, new_accuracy, best_accuracy,
+            )
+            session_store.append_log(
+                state["session_id"],
+                f"  ⚠ {rule_id}: regression ({new_accuracy:.0%} < {best_accuracy:.0%}) — reverted to best description",
             )
         else:
             current_description = record["current_description"]
             current_trigger_description = record.get("trigger_description")
+            current_predictions = dict(record.get("current_predictions") or {})
+            current_rationales = dict(record.get("current_rationales") or {})
             if new_accuracy >= best_accuracy:
                 best_accuracy = new_accuracy
                 best_description = record["current_description"]
+                best_predictions = current_predictions
+                best_rationales = current_rationales
                 if is_dynamic:
                     best_trigger_description = record.get("trigger_description")
 
@@ -78,6 +92,8 @@ async def benchmarking(state: OptimizationState) -> dict:
             **record,
             "current_description": current_description,
             "trigger_description": current_trigger_description,
+            "current_predictions": current_predictions,
+            "current_rationales": current_rationales,
             "current_accuracy": new_accuracy,
             "current_precision": metrics["precision"],
             "current_recall": metrics["recall"],
@@ -91,6 +107,8 @@ async def benchmarking(state: OptimizationState) -> dict:
             "best_accuracy": best_accuracy,
             "best_description": best_description,
             "best_trigger_description": best_trigger_description,
+            "best_predictions": best_predictions,
+            "best_rationales": best_rationales,
             "iteration_history": [*record["iteration_history"], history_entry],
         }
 

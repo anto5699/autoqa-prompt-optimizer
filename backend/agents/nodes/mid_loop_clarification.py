@@ -145,10 +145,10 @@ async def mid_loop_clarification(state: OptimizationState) -> dict:
             question_id=str(uuid.uuid4()),
             parameter_name=rule_id,
             question_text=(
-                f"For '{display_name}', our analysis found that the current description logic "
-                f"does not match how this metric was labelled in your data. The ground truth "
-                f"suggests a different evaluation approach. Would you like to discard the current "
-                f"description and rewrite it from scratch based on what the ground truth data shows?"
+                f"For '{display_name}', the GT alignment audit found a description logic mismatch:\n\n"
+                f"{audit}\n\n"
+                f"Would you like to discard the current description and rewrite it from scratch "
+                f"based on the revised optimization strategy above?"
             ),
             rationale="GT alignment audit found DESCRIPTION_MISMATCH — description logic contradicts ground truth.",
             question_type="pivot",

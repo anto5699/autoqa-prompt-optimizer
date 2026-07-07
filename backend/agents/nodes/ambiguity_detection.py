@@ -74,7 +74,8 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
         "details": {"rules": len(state["rules"])},
     })
 
-    all_questions: list[ClarifyingQuestion] = []
+    # Include pivot questions from pre_flight_gt_audit (if any)
+    all_questions: list[ClarifyingQuestion] = list(state.get("clarifying_questions") or [])
 
     system_prompt = state["system_prompt"]
     system_prompt_v2 = state.get("system_prompt_v2", "")
@@ -114,10 +115,17 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
         resume_data = interrupt({"clarifying_questions": all_questions})
         user_answers = resume_data.get("user_answers", {}) if isinstance(resume_data, dict) else {}
 
+        newly_approved = [
+            q["parameter_name"]
+            for q in all_questions
+            if q.get("question_type") == "pivot"
+            and user_answers.get(q["question_id"], "").strip().lower().startswith("y")
+        ]
         return {
             "clarifying_questions": all_questions,
             "clarification_complete": True,
             "user_answers": user_answers,
+            "pivot_approved_rules": list(set(state.get("pivot_approved_rules") or []) | set(newly_approved)),
             "current_phase": "generating_baselines",
             "progress_log": [
                 f"Ambiguity detection: {len(all_questions)} clarifying question(s) generated — answers received"

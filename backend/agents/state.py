@@ -72,6 +72,7 @@ class OptimizationState(TypedDict):
     clarified_rule_ids: List[str]
     pivot_asked_rule_ids: List[str]   # rules that received a pivot (logic-replace) question
     pivot_approved_rules: List[str]   # rules where user approved discarding current description logic
+    pre_audit_results: Dict[str, str]  # rule_id → pre-flight GT audit text (all audited rules)
 
     current_iteration: int
     max_iterations: int

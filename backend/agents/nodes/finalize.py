@@ -126,6 +126,7 @@ async def finalize(state: OptimizationState) -> dict:
 
     gt_map = state["ground_truth_map"]
 
+    pre_audit_results = state.get("pre_audit_results") or {}
     parameters_report: dict = {}
     for rule_id, record in records.items():
         converged = record["status"] == "converged"
@@ -193,6 +194,7 @@ async def finalize(state: OptimizationState) -> dict:
             "conversation_results": conversation_results,
             "pivot_approved": pivot_approved,
             "pivot_info": pivot_info,
+            "pre_audit_result": pre_audit_results.get(rule_id),
         }
 
     # Generate plain-language report summaries for every parameter in parallel

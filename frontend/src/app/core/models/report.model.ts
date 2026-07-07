@@ -43,6 +43,7 @@ export interface ParameterReport {
     reason: string;
     original_description: string;
   };
+  pre_audit_result?: string;
 }
 
 export interface ReportSummary {

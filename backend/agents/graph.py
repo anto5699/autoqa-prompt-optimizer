@@ -9,6 +9,7 @@ from agents.nodes.evaluator import evaluator
 from agents.nodes.finalize import finalize
 from agents.nodes.gt_alignment_audit import gt_alignment_audit
 from agents.nodes.mid_loop_clarification import mid_loop_clarification
+from agents.nodes.pre_flight_gt_audit import pre_flight_gt_audit
 from agents.nodes.prompt_optimizer import prompt_optimizer
 from agents.nodes.rca_analyzer import rca_analyzer
 from agents.state import OptimizationState
@@ -48,6 +49,7 @@ def route_entry(state: OptimizationState) -> str:
 _builder = StateGraph(OptimizationState)
 
 _builder.add_node("csv_ingestion", csv_ingestion)
+_builder.add_node("pre_flight_gt_audit", pre_flight_gt_audit)
 _builder.add_node("ambiguity_detection", ambiguity_detection)
 _builder.add_node("baseline_prompt_generator", baseline_prompt_generator)
 _builder.add_node("evaluator", evaluator)
@@ -63,7 +65,8 @@ _builder.add_conditional_edges(
     route_entry,
     {"csv_ingestion": "csv_ingestion", "evaluator": "evaluator"},
 )
-_builder.add_edge("csv_ingestion", "ambiguity_detection")
+_builder.add_edge("csv_ingestion", "pre_flight_gt_audit")
+_builder.add_edge("pre_flight_gt_audit", "ambiguity_detection")
 _builder.add_edge("ambiguity_detection", "baseline_prompt_generator")
 _builder.add_edge("baseline_prompt_generator", "evaluator")
 _builder.add_edge("evaluator", "benchmarking")

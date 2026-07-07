@@ -246,6 +246,12 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           <strong>Regression Warning:</strong> {{ e.val.regression_warning.message }}
         </div>
 
+        <!-- Pre-flight GT Audit -->
+        <div *ngIf="e.val.pre_audit_result" class="print-pre-audit">
+          <div class="print-pre-audit-title">Pre-flight GT Audit</div>
+          <pre class="print-pre-audit-text">{{ e.val.pre_audit_result }}</pre>
+        </div>
+
       </div>
 
     </div>
@@ -369,6 +375,11 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
 
     /* Regression warning */
     .print-regression { font-size: 0.82rem; color: #991b1b; background: #fee2e2; border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
+
+    /* Pre-flight GT audit */
+    .print-pre-audit { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 10px 14px; margin-top: 10px; }
+    .print-pre-audit-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #15803d; margin-bottom: 6px; }
+    .print-pre-audit-text { font-family: inherit; font-size: 0.82rem; color: #14532d; line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0; }
 
     @media print {
       .print-loading { display: none; }

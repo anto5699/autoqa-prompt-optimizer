@@ -53,6 +53,7 @@ class ParameterReport(BaseModel):
     conversation_results: List[Dict[str, Any]] = Field(default_factory=list)
     pivot_approved: bool = False
     pivot_info: Optional[PivotInfo] = None
+    pre_audit_result: Optional[str] = None
 
 
 class ReportSummary(BaseModel):

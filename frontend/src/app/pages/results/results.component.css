@@ -232,6 +232,20 @@
   margin: 0;
 }
 
+/* Pre-flight GT audit card */
+.pre-audit-card {
+  background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 14px;
+}
+.pre-audit-title {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: #15803d; margin-bottom: 8px;
+}
+.pre-audit-text {
+  font-family: inherit; font-size: 0.82rem; color: #14532d;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0;
+}
+
 /* Pivot report card */
 .pivot-report-card {
   background: #eef2ff; border: 1px solid #a5b4fc; border-radius: 8px;

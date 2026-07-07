@@ -186,6 +186,12 @@ type FilterKey = 'all' | 'converged' | 'not-met';
             <pre class="report-summary-text">{{ entry.val.report_summary }}</pre>
           </div>
 
+          <!-- Pre-flight GT Audit -->
+          <div *ngIf="entry.val.pre_audit_result" class="pre-audit-card">
+            <div class="pre-audit-title">Pre-flight GT Audit</div>
+            <pre class="pre-audit-text">{{ entry.val.pre_audit_result }}</pre>
+          </div>
+
           <!-- Pivot report -->
           <div *ngIf="entry.val.pivot_approved && entry.val.pivot_info" class="pivot-report-card">
             <div class="pivot-report-title">Description Logic Pivot</div>

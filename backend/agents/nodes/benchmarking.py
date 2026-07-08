@@ -34,6 +34,23 @@ async def benchmarking(state: OptimizationState) -> dict:
         new_accuracy = metrics["accuracy"]
         is_dynamic = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
 
+        # NA-collapse detection: warn when predictions have far more NAs than ground truth
+        _pred_na = sum(1 for p in record["current_predictions"].values() if p == "NA")
+        _pred_total = len(record["current_predictions"])
+        _pred_na_rate = _pred_na / _pred_total if _pred_total else 0.0
+        _gt_na = sum(1 for gt_by_rule in ground_truth_map.values() if gt_by_rule.get(rule_id) == "NA")
+        _gt_na_rate = _gt_na / len(ground_truth_map) if ground_truth_map else 0.0
+        if _pred_na_rate > _gt_na_rate + 0.20:
+            session_store.append_log(
+                state["session_id"],
+                f"  ⚠ {rule_id}: description may be over-qualifying NA "
+                f"({_pred_na_rate:.0%} predicted NA vs {_gt_na_rate:.0%} in ground truth) — check trigger scope",
+            )
+            logger.warning(
+                "session=%s rule_id=%s NA collapse: pred_na=%.2f gt_na=%.2f",
+                state["session_id"], rule_id, _pred_na_rate, _gt_na_rate,
+            )
+
         # First pass: seed regression tracking
         if record.get("initial_accuracy") is None:
             initial_accuracy = new_accuracy

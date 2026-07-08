@@ -50,7 +50,9 @@ Generalisation rules:
 - Write criteria that generalise to conversations not in this sample. Never anchor PASS_CRITERIA to a specific phrase, sentence, or pattern you observe in the failure examples
 - The RCA failure examples are evidence of a failure pattern — write criteria that address the underlying observable behaviour, not the surface form of those specific transcripts
 - EXAMPLES in your output must be representative illustrative utterances you compose yourself; do not copy or closely paraphrase verbatim transcript content from the failure examples
-- After writing each criterion, apply this mental test: "Would this criterion produce the same verdict on a conversation I have not seen, if the same underlying behaviour is present?" If the answer depends on a specific phrase from the failure examples, reframe it in terms of the behaviour\
+- After writing each criterion, apply this mental test: "Would this criterion produce the same verdict on a conversation I have not seen, if the same underlying behaviour is present?" If the answer depends on a specific phrase from the failure examples, reframe it in terms of the behaviour
+- Do NOT add new PASS_CRITERIA that were absent from the original description unless the RCA explicitly identifies a gap in the original logic (i.e., the original description is structurally incapable of capturing the correct behaviour). Adding criteria to patch individual failure cases without a structural reason is overfitting.
+- After writing your revised description, compare each new or changed criterion against the original description. If a criterion does not have a counterpart in the original and is not justified by an explicit RCA finding, remove it.\
 """
 
 
@@ -83,6 +85,7 @@ HARD CONSTRAINTS:
 - Bullet ≤ 20 words; whole description ≤ 12 lines
 - CONDITION, EXPECTED BEHAVIOR, and EXCEPTION are all mandatory
 - PROHIBITED is optional; include only when a specific action must be explicitly forbidden
+- Do NOT add CONDITION triggers, EXPECTED BEHAVIOR items, or EXCEPTIONS that were absent from the original description unless the RCA explicitly identifies that absence as a root cause of failures. Patching individual failure cases by tightening CONDITION or widening EXCEPTION is overfitting.
 
 REFERENCE PATTERNS:
 # Unconditional
@@ -162,6 +165,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
     total_rules = len(below_target)
     session_store.update(session_id, {"node_progress": {"node": "optimizing_prompts", "step": 0, "total": total_rules}})
 
+    accuracy_target = state.get("accuracy_target", 0.90)
     pivot_approved_rules = set(state.get("pivot_approved_rules") or [])
 
     for idx, rule_id in enumerate(below_target):
@@ -182,8 +186,8 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
                 "current_description": record.get("trigger_description") or "",
                 "speaker": record.get("trigger_speaker") or "customer",
             }
-            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id, pivot_approved=False)
-            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved)
+            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id, pivot_approved=False, accuracy_target=accuracy_target)
+            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved, accuracy_target=accuracy_target)
             records[rule_id] = {
                 **record,
                 "current_description": new_description,
@@ -193,7 +197,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
             }
         else:
             # Single description optimisation: covers V1 static and all V2 records
-            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved)
+            new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved, accuracy_target=accuracy_target)
             records[rule_id] = {
                 **record,
                 "current_description": new_description,
@@ -250,7 +254,7 @@ def _is_regressing(record: dict) -> bool:
     return history[-1]["accuracy"] < history[-2]["accuracy"]
 
 
-async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str, *, pivot_approved: bool = False) -> str:
+async def _optimise_description_v2(record: dict, user_answers: dict, llm, session_id: str, *, pivot_approved: bool = False, accuracy_target: float = 0.90) -> str:
     trajectory = _accuracy_trajectory(record)
     stagnant = _is_stagnant(record)
     alignment_audit = record.get("alignment_audit")
@@ -264,6 +268,17 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
             f"GT alignment audit:\n{alignment_audit}"
         )
         alignment_block = ""
+    elif _is_high_accuracy(record):
+        rewrite_instruction = (
+            "IMPORTANT: This rule already achieves high accuracy (≥ 90%). "
+            "Keep CONDITION, EXPECTED BEHAVIOR, PROHIBITED, and EXCEPTION text identical. "
+            "The ONLY permitted change is to add or revise EXAMPLES if the RCA identifies a specific edge case. "
+            "If the RCA finds no actionable change, output the full description unchanged."
+        )
+        alignment_block = (
+            f"Ground truth alignment audit (use to understand WHAT needs to change):\n{alignment_audit}\n\n"
+            if alignment_audit else ""
+        )
     elif _is_regressing(record):
         _h = record.get("iteration_history", [])
         rewrite_instruction = (
@@ -289,8 +304,13 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
         )
     else:
         rewrite_instruction = (
-            "Rewrite the description in V2 Unified Criteria format to address the identified failure patterns. "
-            "Keep YES/NO/NA semantics intact — do not change CONDITION/EXCEPTION logic unless RCA explicitly requires it."
+            "Rewrite the description in V2 Unified Criteria format to address ALL identified failure patterns. "
+            "For each failure type in the RCA, identify which section (CONDITION, EXPECTED BEHAVIOR, EXCEPTION) "
+            "is responsible and change only that section. "
+            "Keep YES/NO/NA semantics intact unless the RCA explicitly identifies the trigger logic as a root cause. "
+            "If the RCA identifies both 'incorrectly marked as adhered' AND 'incorrectly marked as not adhered' failures, "
+            "treat them as separate criteria problems: adjust EXPECTED BEHAVIOR for false passes "
+            "and adjust CONDITION or EXCEPTION for false failures — do not collapse both into a single broad change."
         )
         alignment_block = (
             f"Ground truth alignment audit (use to understand WHAT needs to change):\n{alignment_audit}\n\n"
@@ -312,12 +332,34 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
     if user_answers:
         answers_block = "\nUser clarifications:\n" + "\n".join(f"- {a}" for a in user_answers.values())
 
+    original_desc = record.get("original_description") or ""
+    original_block = (
+        f"Original (baseline) description:\n{original_desc}\n\n"
+        if original_desc and original_desc.strip() != record["current_description"].strip() else ""
+    )
+
+    accuracy_context = ""
+    if record.get("initial_accuracy") is not None:
+        accuracy_context = (
+            f"Accuracy context: baseline {record['initial_accuracy']:.0%} → "
+            f"current {record['current_accuracy']:.0%} → target {accuracy_target:.0%}\n\n"
+        )
+
+    rca_label = (
+        "Root cause analysis — the RCA may identify MULTIPLE distinct failure types. "
+        "You MUST address ALL of them in your revised description. "
+        "Do not silently focus on one failure type and ignore others.\n"
+        "Use findings as evidence of underlying behaviour patterns, not as a directive to copy specific transcript phrases:"
+    )
+
     prompt = (
         f"Rule ID: {record['rule_id']}\n"
         f"Speaker: {record['speaker']} | Evaluation type: {record['evaluation_type']}\n\n"
         f"Current description:\n{record['current_description']}\n\n"
-        f"Root cause analysis:\n{record.get('rca_findings', 'Not available')}\n"
+        f"{original_block}"
+        f"{rca_label}\n{record.get('rca_findings', 'Not available')}\n\n"
         f"{f'Accuracy trajectory: {trajectory}' if trajectory else ''}\n"
+        f"{accuracy_context}"
         f"{alignment_block}"
         f"{answers_block}\n\n"
         f"{v2_constraints}\n"
@@ -336,10 +378,10 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
 
 
 async def _optimise_description(
-    record: dict, user_answers: dict, llm: BaseChatModel, session_id: str, *, pivot_approved: bool = False
+    record: dict, user_answers: dict, llm: BaseChatModel, session_id: str, *, pivot_approved: bool = False, accuracy_target: float = 0.90
 ) -> str:
     if record.get("version") == "v2":
-        return await _optimise_description_v2(record, user_answers, llm, session_id, pivot_approved=pivot_approved)
+        return await _optimise_description_v2(record, user_answers, llm, session_id, pivot_approved=pivot_approved, accuracy_target=accuracy_target)
     # V1 path continues unchanged below
     rule_type = record["rule_type"]
     clarifications = "\n".join(f"- {v}" for v in user_answers.values()) if user_answers else "None"
@@ -399,9 +441,15 @@ async def _optimise_description(
         )
     else:
         rewrite_instruction = (
-            "Rewrite the description in the structured format to address the identified failure patterns. "
-            "Update PASS_CRITERIA to fix the specific errors identified in the RCA. "
-            "Add or revise EXAMPLES to reflect the failure cases."
+            "Rewrite the description in the structured format to address ALL identified failure patterns. "
+            "For each failure type in the RCA:\n"
+            "  • Identify the specific PASS_CRITERION (or absence of one) responsible for that failure type.\n"
+            "  • Change ONLY that criterion — do not globally tighten or loosen unrelated criteria.\n"
+            "If the RCA identifies both 'incorrectly marked as adhered' AND 'incorrectly marked as not adhered' failures, "
+            "these are not necessarily contradictory — they likely point to DIFFERENT criteria. "
+            "Tighten the criterion that causes false passes; loosen the criterion that causes false failures. "
+            "If a single criterion is responsible for both, prioritise reducing the more frequent failure type "
+            "and add a qualifier (e.g., PASS_LOGIC change or an EXCEPTION note) for the less frequent one."
         )
 
     alignment_audit = record.get("alignment_audit")
@@ -422,14 +470,36 @@ async def _optimise_description(
     else:
         alignment_block = ""
 
+    original_desc = record.get("original_description") or ""
+    original_block = (
+        f"Original (baseline) description:\n{original_desc}\n\n"
+        if original_desc and original_desc.strip() != record["current_description"].strip() else ""
+    )
+
+    accuracy_context = ""
+    if record.get("initial_accuracy") is not None:
+        accuracy_context = (
+            f"Accuracy context: baseline {record['initial_accuracy']:.0%} → "
+            f"current {record['current_accuracy']:.0%} → target {accuracy_target:.0%}\n\n"
+        )
+
+    rca_label = (
+        "Root cause analysis — the RCA may identify MULTIPLE distinct failure types. "
+        "You MUST address ALL of them in your revised description. "
+        "Do not silently focus on one failure type and ignore others.\n"
+        "Use findings as evidence of underlying behaviour patterns, not as a directive to copy specific transcript phrases:"
+    )
+
     prompt = (
         f"Rule ID: {record['rule_id']}\n"
         f"Rule type: {rule_type} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']} | n_messages: {record['n_messages']}\n\n"
         f"Current description:\n{record['current_description']}\n\n"
-        f"Root cause analysis (use as evidence of failure patterns — write criteria that address the underlying behaviour, not the specific phrases or cases shown):\n{record.get('rca_findings', 'No findings available.')}\n\n"
+        f"{original_block}"
+        f"{rca_label}\n{record.get('rca_findings', 'No findings available.')}\n\n"
         f"{alignment_block}"
         f"{trajectory_line}"
+        f"{accuracy_context}"
         f"User clarifications:\n{clarifications}\n\n"
         f"Constraints: {constraints}\n\n"
         f"{rewrite_instruction} "

@@ -10,6 +10,7 @@ from utils.session_store import session_store
 logger = logging.getLogger(__name__)
 
 _MAX_CORRECT_SAMPLES = 3
+_MAX_ERROR_SAMPLES_PER_TYPE = 5
 
 _SYSTEM = (
     "You are an expert QA rule analyst. Analyse evaluation errors to identify root causes "
@@ -84,7 +85,7 @@ def _collect_error_cases(
     conversations_by_id: dict,
     version: str = "v1",
 ) -> list[dict]:
-    errors = []
+    by_type: dict[str, list[dict]] = {}
     for conv_id, gt_by_rule in ground_truth_map.items():
         gt = gt_by_rule.get(rule_id)
         if gt == "NA" or gt is None:
@@ -110,7 +111,7 @@ def _collect_error_cases(
                     error_type = "false_na_prediction"
                 else:
                     continue
-            errors.append({
+            by_type.setdefault(error_type, []).append({
                 "conversation_id": conv_id,
                 "ground_truth": gt,
                 "prediction": pred,
@@ -118,6 +119,10 @@ def _collect_error_cases(
                 "transcript": conv.get("transcript", []),
                 "rationale": rationales.get(conv_id, ""),
             })
+    # Cap each error type separately so all types are represented in the prompt
+    errors = []
+    for cases in by_type.values():
+        errors.extend(cases[:_MAX_ERROR_SAMPLES_PER_TYPE])
     return errors
 
 
@@ -224,13 +229,36 @@ async def _run_rca(
             )
             description_section = f"Current description:\n{record['current_description']}\n\n"
 
-    cases_text = "\n\n".join(
-        f"[{i+1}] Error type: {e['error_type']}\n"
-        f"Ground truth: {e['ground_truth']} | Prediction: {e['prediction']}\n"
-        f"Evaluator's stated reason: {e['rationale'] or '(none provided)'}\n"
-        f"Transcript:\n{_format_transcript(e['transcript'])}"
-        for i, e in enumerate(error_cases)
-    )
+    # Original description drift reference
+    original_desc = record.get("original_description")
+    drift_block = ""
+    if original_desc and original_desc.strip() != record["current_description"].strip():
+        drift_block = (
+            f"Original (baseline) description — for reference only:\n"
+            f"{original_desc}\n\n"
+            "If the current description has drifted significantly from the original in ways not "
+            "supported by the failure patterns below, flag this as a possible cause.\n\n"
+        )
+
+    # Group error cases by type for structured presentation
+    errors_by_type: dict[str, list[dict]] = {}
+    for e in error_cases:
+        errors_by_type.setdefault(e["error_type"], []).append(e)
+
+    breakdown = ", ".join(f"{len(v)} {k.replace('_', ' ')}" for k, v in errors_by_type.items())
+
+    grouped_text = ""
+    case_counter = 0
+    for etype, cases in errors_by_type.items():
+        label = etype.replace("_", " ").title()
+        grouped_text += f"\n{label} ({len(cases)} case{'s' if len(cases) > 1 else ''}):\n"
+        for e in cases:
+            case_counter += 1
+            grouped_text += (
+                f"[{case_counter}] Ground truth: {e['ground_truth']} | Prediction: {e['prediction']}\n"
+                f"Evaluator's stated reason: {e['rationale'] or '(none provided)'}\n"
+                f"Transcript:\n{_format_transcript(e['transcript'])}\n"
+            )
 
     correct_cases_block = ""
     if correct_cases:
@@ -251,15 +279,39 @@ async def _run_rca(
         if history else ""
     )
 
+    multiple_types = len(errors_by_type) > 1
+    if multiple_types:
+        output_format = (
+            "There are multiple failure types above. Address each type separately:\n\n"
+            "For [failure type name]:\n"
+            "Root cause: <one sentence>\n"
+            "Why it's failing:\n"
+            "• <pattern>\n"
+            "What to improve: <one sentence on the specific wording change for this type>\n\n"
+            "(Repeat the block above for each failure type that has a distinct root cause. "
+            "If two types share the same root cause, group them under a combined heading.)"
+        )
+    else:
+        output_format = (
+            "Root cause: <one sentence in plain English — what the evaluation rule is getting wrong>\n\n"
+            "Why it's failing:\n"
+            "• <specific pattern observed in the error cases above>\n"
+            "• <second pattern, or omit if only one pattern>\n\n"
+            "What to improve: <one sentence on the specific change the wording needs — "
+            "where the error pattern is clear, name the exact criterion and state its replacement>"
+        )
+
     prompt = (
         f"Rule ID: {rule_id}\n"
         f"Rule type: {rule_type} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']}\n\n"
         f"{description_section}"
+        f"{drift_block}"
         f"{trajectory_str}"
         f"Error classification:\n{error_labels_str}\n\n"
         f"{correct_cases_block}"
-        f"Incorrectly classified cases — evidence of what is failing ({len(error_cases)} shown):\n{cases_text}\n\n"
+        f"Failure breakdown: {breakdown}\n\n"
+        f"Incorrectly classified cases — evidence of what is failing ({len(error_cases)} shown):{grouped_text}\n"
         "Use the contrast between correctly and incorrectly classified cases to identify the exact "
         "criterion or phrasing boundary responsible for the errors — not just what the failing cases "
         "have in common in isolation.\n\n"
@@ -268,12 +320,7 @@ async def _run_rca(
         "cross-check it against the transcript.\n\n"
         f"{ask}\n\n"
         "Respond using this EXACT format (plain English, no markdown, no asterisks, no jargon):\n\n"
-        "Root cause: <one sentence in plain English — what the evaluation rule is getting wrong>\n\n"
-        "Why it's failing:\n"
-        "• <specific pattern observed in the error cases above>\n"
-        "• <second pattern, or omit if only one pattern>\n\n"
-        "What to improve: <one sentence on the specific change the wording needs — "
-        "where the error pattern is clear, name the exact criterion and state its replacement>\n\n"
+        f"{output_format}\n\n"
         "Use everyday language. Do not use the terms 'false positive', 'false negative', 'LLM', "
         "'model', 'description', or 'criterion'. Instead say 'incorrectly marked as Yes', "
         "'incorrectly marked as No', 'the evaluation rule', 'the wording'."

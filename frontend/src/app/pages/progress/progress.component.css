@@ -305,3 +305,45 @@
   border-radius: 6px; background: #fff;
 }
 .pivot-option input[type="radio"] { accent-color: #f59e0b; flex-shrink: 0; }
+
+/* Ground-truth audit table */
+.gt-audit-heading {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 4px 0 6px;
+}
+.gt-audit-intro {
+  font-size: 0.82rem;
+  color: #6b7280;
+  margin-bottom: 10px;
+}
+.gt-audit-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.gt-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.gt-audit-table th,
+.gt-audit-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+}
+.gt-audit-table th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #4b5563;
+  white-space: nowrap;
+}
+.gt-audit-table td code {
+  font-size: 0.78rem;
+  color: #4338ca;
+}
+.gt-audit-table tbody tr:last-child td { border-bottom: none; }

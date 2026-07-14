@@ -121,6 +121,9 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
             if q.get("question_type") == "pivot"
             and user_answers.get(q["question_id"], "").strip().lower().startswith("y")
         ]
+
+        gt_update = _apply_gt_relabels(state, all_questions, user_answers)
+
         return {
             "clarifying_questions": all_questions,
             "clarification_complete": True,
@@ -129,7 +132,8 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
             "current_phase": "generating_baselines",
             "progress_log": [
                 f"Ambiguity detection: {len(all_questions)} clarifying question(s) generated — answers received"
-            ],
+            ] + gt_update.pop("progress_log", []),
+            **gt_update,
         }
 
     return {
@@ -138,6 +142,69 @@ async def ambiguity_detection(state: OptimizationState) -> dict:
         "current_phase": "generating_baselines",
         "progress_log": [
             "Ambiguity detection: no ambiguities found — proceeding"
+        ],
+    }
+
+
+def _apply_gt_relabels(
+    state: OptimizationState,
+    all_questions: list[ClarifyingQuestion],
+    user_answers: dict,
+) -> dict:
+    """Overlay accepted GT-audit relabels onto the ground-truth map, non-destructively.
+
+    Returns a partial state update: a corrected `ground_truth_map`, a one-time snapshot of the
+    original under `ground_truth_map_original`, and `gt_corrections_applied` per rule. Returns {}
+    when nothing was accepted. The source CSV is never touched.
+    """
+    accepted = [
+        q for q in all_questions
+        if q.get("question_type") == "gt_relabel"
+        and user_answers.get(q["question_id"], "").strip().lower().startswith("y")
+    ]
+    if not accepted:
+        return {}
+
+    original = state["ground_truth_map"]
+    corrected = {conv_id: dict(labels) for conv_id, labels in original.items()}
+    corrections: dict[str, list[dict]] = {}
+    applied_total = 0
+
+    for q in accepted:
+        rule_id = q["parameter_name"]
+        rule_corrections: list[dict] = []
+        for case in q.get("cases", []):
+            conv_id = case["conversation_id"]
+            should_be = case["should_be"]
+            if conv_id not in corrected:
+                continue
+            from_gt = corrected[conv_id].get(rule_id)
+            if from_gt == should_be:
+                continue
+            corrected[conv_id][rule_id] = should_be
+            rule_corrections.append({
+                "conversation_id": conv_id,
+                "from_gt": from_gt,
+                "to_gt": should_be,
+            })
+        if rule_corrections:
+            corrections[rule_id] = rule_corrections
+            applied_total += len(rule_corrections)
+
+    if not applied_total:
+        return {}
+
+    existing = state.get("gt_corrections_applied") or {}
+    merged = {**existing, **corrections}
+
+    return {
+        "ground_truth_map": corrected,
+        # Snapshot the pre-correction map once; keep the earliest snapshot on repeat passes.
+        "ground_truth_map_original": state.get("ground_truth_map_original") or original,
+        "gt_corrections_applied": merged,
+        "progress_log": [
+            f"GT audit: applied {applied_total} label correction(s) across "
+            f"{len(corrections)} metric(s) — accuracy will be scored against corrected ground truth"
         ],
     }
 

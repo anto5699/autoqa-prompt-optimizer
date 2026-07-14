@@ -53,7 +53,11 @@ class ClarifyingQuestion(TypedDict, total=False):
     question_text: str
     rationale: str
     clarification_forced: bool  # True when forced as fallback; False/absent for LLM-generated
-    question_type: str  # "ambiguity" (default) | "pivot"
+    question_type: str  # "ambiguity" (default) | "pivot" | "gt_relabel"
+    # For "gt_relabel" questions only: flagged cases + display metadata carried to the UI.
+    cases: List[Dict[str, str]]  # [{conversation_id, current_gt, should_be, reason}]
+    flagged_count: int
+    metric_display_name: str
 
 
 class OptimizationState(TypedDict):
@@ -75,6 +79,11 @@ class OptimizationState(TypedDict):
     pivot_asked_rule_ids: List[str]   # rules that received a pivot (logic-replace) question
     pivot_approved_rules: List[str]   # rules where user approved discarding current description logic
     pre_audit_results: Dict[str, str]  # rule_id → pre-flight GT audit text (all audited rules)
+    # rule_id → flagged per-conversation cases [{conversation_id, current_gt, should_be, reason}]
+    pre_audit_cases: Dict[str, List[Dict[str, str]]]
+    ground_truth_map_original: Optional[Dict[str, Dict[str, str]]]  # snapshot before GT relabel corrections
+    # rule_id → applied corrections [{conversation_id, from, to}] (empty until user accepts a gt_relabel)
+    gt_corrections_applied: Dict[str, List[Dict[str, str]]]
 
     current_iteration: int
     max_iterations: int

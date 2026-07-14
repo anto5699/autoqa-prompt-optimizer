@@ -186,10 +186,35 @@ type FilterKey = 'all' | 'converged' | 'not-met';
             <pre class="report-summary-text">{{ entry.val.report_summary }}</pre>
           </div>
 
-          <!-- Pre-flight GT Audit -->
-          <div *ngIf="entry.val.pre_audit_result" class="pre-audit-card">
-            <div class="pre-audit-title">Pre-flight GT Audit</div>
-            <pre class="pre-audit-text">{{ entry.val.pre_audit_result }}</pre>
+          <!-- Ground Truth Audit -->
+          <div *ngIf="entry.val.gt_audit_cases?.length || entry.val.pre_audit_result" class="pre-audit-card">
+            <div class="pre-audit-title">Ground Truth Audit</div>
+            <div *ngIf="entry.val.gt_audit_cases?.length; else preAuditText">
+              <div class="gt-audit-heading">
+                {{ cleanName(entry.key) }} — {{ entry.val.gt_audit_cases!.length }} case(s) flagged
+              </div>
+              <div *ngIf="entry.val.gt_corrections_applied?.length" class="gt-audit-corrected-note">
+                {{ entry.val.gt_corrections_applied!.length }} label(s) corrected — accuracy scored against corrected ground truth.
+              </div>
+              <div class="gt-audit-table-wrap">
+                <table class="gt-audit-table">
+                  <thead>
+                    <tr><th>Conversation</th><th>Current GT</th><th>Should Be</th><th>Why</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr *ngFor="let c of entry.val.gt_audit_cases">
+                      <td><code>{{ shortConv(c.conversation_id) }}</code></td>
+                      <td>{{ gtLabel(c.current_gt) }}</td>
+                      <td>{{ gtLabel(c.should_be) }}</td>
+                      <td>{{ c.reason }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <ng-template #preAuditText>
+              <pre class="pre-audit-text">{{ entry.val.pre_audit_result }}</pre>
+            </ng-template>
           </div>
 
           <!-- Pivot report -->
@@ -329,6 +354,21 @@ export class ResultsComponent implements OnInit {
 
   toggle(key: string)      { this.expanded[key] = !this.expanded[key]; }
   toggleConvs(key: string) { this.showConvs[key] = !this.showConvs[key]; }
+
+  cleanName(name: string): string {
+    return name.replace(/__answer$/, '').replace(/__trigger$/, '');
+  }
+
+  shortConv(id: string): string {
+    return id.split('-').slice(0, 2).join('-');
+  }
+
+  gtLabel(v: string): string {
+    if (v === 'Yes') return 'Yes (Adhered)';
+    if (v === 'No') return 'No (Not Adhered)';
+    if (v === 'NA') return 'NA (Not Applicable)';
+    return v;
+  }
 
   pct(v: number): string { return (v * 100).toFixed(1) + '%'; }
 

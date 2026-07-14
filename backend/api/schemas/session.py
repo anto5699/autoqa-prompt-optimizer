@@ -25,12 +25,21 @@ class CreateSessionResponse(BaseModel):
     conversation_count: int
 
 
+class GtAuditCase(BaseModel):
+    conversation_id: str
+    current_gt: str
+    should_be: str
+    reason: str
+
+
 class ParameterSummary(BaseModel):
     accuracy: float
     status: str
     rca_findings: Optional[str] = None
     alignment_audit: Optional[str] = None
     audit_iteration: Optional[int] = None
+    gt_audit_cases: Optional[List[GtAuditCase]] = None
+    gt_audit_flagged_count: Optional[int] = None
 
 
 class NodeProgress(BaseModel):

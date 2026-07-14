@@ -18,6 +18,19 @@ export interface ConversationResult {
   correct: boolean | null;
 }
 
+export interface GtAuditCase {
+  conversation_id: string;
+  current_gt: string;
+  should_be: string;
+  reason: string;
+}
+
+export interface GtCorrection {
+  conversation_id: string;
+  from_gt: string;
+  to_gt: string;
+}
+
 export interface ParameterReport {
   status: string;
   original_description?: string;
@@ -44,6 +57,9 @@ export interface ParameterReport {
     original_description: string;
   };
   pre_audit_result?: string;
+  gt_audit_cases?: GtAuditCase[];
+  gt_audit_flagged_count?: number;
+  gt_corrections_applied?: GtCorrection[];
 }
 
 export interface ReportSummary {

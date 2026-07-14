@@ -5,7 +5,7 @@ import { Subscription, interval } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { SessionService } from '../../core/services/session.service';
 import { SseService } from '../../core/services/sse.service';
-import { ClarifyingQuestion, NodeProgress } from '../../core/models/session.model';
+import { ClarifyingQuestion, GtAuditCase, NodeProgress } from '../../core/models/session.model';
 
 const PHASE_LABELS: Record<string, string> = {
   ingesting: 'Ingesting CSV',
@@ -100,23 +100,58 @@ const PIPELINE = [
                 <span *ngIf="ruleTypeBadge(q.parameter_name)" class="q-rule-type">{{ ruleTypeBadge(q.parameter_name) }}</span>
               </div>
               <div class="q-text">{{ q.question_text }}</div>
-              <ng-container *ngIf="q.question_type === 'pivot'; else freeText">
-                <div class="pivot-options">
-                  <label class="pivot-option">
-                    <input type="radio" [name]="'pivot-' + q.question_id"
-                           value="Yes" (change)="setAnswerStr(q.question_id, 'Yes')"> Yes, replace the logic
-                  </label>
-                  <label class="pivot-option">
-                    <input type="radio" [name]="'pivot-' + q.question_id"
-                           value="No" (change)="setAnswerStr(q.question_id, 'No')"> No, keep refining
-                  </label>
-                </div>
+              <ng-container [ngSwitch]="q.question_type">
+                <ng-container *ngSwitchCase="'gt_relabel'">
+                  <div class="gt-audit-heading">
+                    {{ q.metric_display_name || cleanParamName(q.parameter_name) }} — {{ q.flagged_count }} case(s) flagged
+                  </div>
+                  <div class="gt-audit-intro">
+                    These labels disagree with the parameter definition on a careful reading of each transcript.
+                  </div>
+                  <div class="gt-audit-table-wrap">
+                    <table class="gt-audit-table">
+                      <thead>
+                        <tr><th>Conversation</th><th>Current GT</th><th>Should Be</th><th>Why</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr *ngFor="let c of q.cases">
+                          <td><code>{{ shortConv(c.conversation_id) }}</code></td>
+                          <td>{{ gtLabel(c.current_gt) }}</td>
+                          <td>{{ gtLabel(c.should_be) }}</td>
+                          <td>{{ c.reason }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="pivot-options">
+                    <label class="pivot-option">
+                      <input type="radio" [name]="'relabel-' + q.question_id"
+                             value="Yes" (change)="setAnswerStr(q.question_id, 'Yes')"> Yes, apply these corrections
+                    </label>
+                    <label class="pivot-option">
+                      <input type="radio" [name]="'relabel-' + q.question_id"
+                             value="No" (change)="setAnswerStr(q.question_id, 'No')"> No, keep the original labels
+                    </label>
+                  </div>
+                </ng-container>
+                <ng-container *ngSwitchCase="'pivot'">
+                  <div class="pivot-options">
+                    <label class="pivot-option">
+                      <input type="radio" [name]="'pivot-' + q.question_id"
+                             value="Yes" (change)="setAnswerStr(q.question_id, 'Yes')"> Yes, replace the logic
+                    </label>
+                    <label class="pivot-option">
+                      <input type="radio" [name]="'pivot-' + q.question_id"
+                             value="No" (change)="setAnswerStr(q.question_id, 'No')"> No, keep refining
+                    </label>
+                  </div>
+                </ng-container>
+                <ng-container *ngSwitchDefault>
+                  <textarea class="q-input" rows="3" placeholder="Your answer…"
+                    [value]="pendingAnswers[q.question_id] || ''"
+                    (input)="setAnswer(q.question_id, $event)"></textarea>
+                </ng-container>
               </ng-container>
-              <ng-template #freeText>
-                <textarea class="q-input" rows="3" placeholder="Your answer…"
-                  [value]="pendingAnswers[q.question_id] || ''"
-                  (input)="setAnswer(q.question_id, $event)"></textarea>
-              </ng-template>
             </div>
             <button class="btn-clarify" [disabled]="!allAnswered()" (click)="submitClarification()">
               Submit &amp; Continue
@@ -194,6 +229,30 @@ const PIPELINE = [
               <pre class="audit-text">{{ p.alignment_audit }}</pre>
             </div>
           </div>
+
+          <div *ngIf="gtAuditParams.length" class="audit-panel">
+            <div class="audit-panel-title">Ground Truth Audit</div>
+            <div *ngFor="let p of gtAuditParams" class="audit-item">
+              <div class="gt-audit-heading">
+                {{ cleanParamName(p.rule_id) }} — {{ p.gt_audit_cases.length }} case(s) flagged
+              </div>
+              <div class="gt-audit-table-wrap">
+                <table class="gt-audit-table">
+                  <thead>
+                    <tr><th>Conversation</th><th>Current GT</th><th>Should Be</th><th>Why</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr *ngFor="let c of p.gt_audit_cases">
+                      <td><code>{{ shortConv(c.conversation_id) }}</code></td>
+                      <td>{{ gtLabel(c.current_gt) }}</td>
+                      <td>{{ gtLabel(c.should_be) }}</td>
+                      <td>{{ c.reason }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -203,7 +262,7 @@ const PIPELINE = [
 export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
   phase = 'ingesting';
   log: string[] = [];
-  params: { rule_id: string; accuracy: number; status: string; rca_findings?: string; alignment_audit?: string; audit_iteration?: number }[] = [];
+  params: { rule_id: string; accuracy: number; status: string; rca_findings?: string; alignment_audit?: string; audit_iteration?: number; gt_audit_cases?: GtAuditCase[] }[] = [];
   iteration = 0;
   error = '';
   resuming = false;
@@ -254,6 +313,23 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
     return this.params.filter(p => p.alignment_audit) as { rule_id: string; accuracy: number; status: string; alignment_audit: string; audit_iteration: number }[];
   }
 
+  get gtAuditParams(): { rule_id: string; gt_audit_cases: GtAuditCase[] }[] {
+    return this.params.filter(
+      p => p.gt_audit_cases && p.gt_audit_cases.length
+    ) as { rule_id: string; gt_audit_cases: GtAuditCase[] }[];
+  }
+
+  gtLabel(v: string): string {
+    if (v === 'Yes') return 'Yes (Adhered)';
+    if (v === 'No') return 'No (Not Adhered)';
+    if (v === 'NA') return 'NA (Not Applicable)';
+    return v;
+  }
+
+  shortConv(id: string): string {
+    return id.split('-').slice(0, 2).join('-');
+  }
+
   ngOnInit() {
     this.sessionId = this.route.snapshot.params['sessionId'];
 
@@ -283,6 +359,7 @@ export class ProgressComponent implements OnInit, OnDestroy, AfterViewChecked {
           this.params = Object.entries(s.parameter_summary).map(([rule_id, v]) => ({
             rule_id, accuracy: v.accuracy, status: v.status, rca_findings: v.rca_findings,
             alignment_audit: v.alignment_audit, audit_iteration: v.audit_iteration,
+            gt_audit_cases: v.gt_audit_cases,
           }));
           this.nodeProgress = s.node_progress ?? null;
           if (s.current_phase === 'awaiting_clarification' && !this.awaitingResume) {

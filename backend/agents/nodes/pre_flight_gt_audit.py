@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -11,38 +13,150 @@ from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
 
-_MAX_SAMPLES = 5
-_MAX_TRANSCRIPT_MESSAGES = 10
+_LABEL_MAP = {
+    "yes": "Yes", "adhered": "Yes", "y": "Yes", "true": "Yes",
+    "no": "No", "not adhered": "No", "n": "No", "false": "No",
+    "na": "NA", "n/a": "NA", "not applicable": "NA",
+}
 
-_SYSTEM = (
-    "You are a QA evaluation expert. Analyse whether a rule description is aligned with how ground "
-    "truth labels were actually assigned in the provided conversation data.\n\n"
-    "Your task: compare what the description claims to evaluate vs. what actually distinguishes the "
-    "'Yes' (Adhered) examples from the 'No' (Not Adhered) examples in the data.\n\n"
+_JUDGE_SYSTEM = (
+    "You are a QA ground-truth auditor. For each rule, decide the CORRECT label for this "
+    "conversation strictly according to the rule's own definition — not what a human "
+    "reviewer might have labelled it. Labels:\n"
+    "  Yes  = the agent adhered (answer criterion met, and the scenario is in scope)\n"
+    "  No   = the agent did NOT adhere (answer criterion not met, scenario in scope)\n"
+    "  NA   = the rule does not apply to this conversation (its trigger/scope condition "
+    "is not present)\n\n"
+    "For DYNAMIC rules (with a trigger definition): first decide whether the trigger/scope "
+    "condition is present. If it is NOT present, the label is NA regardless of agent behaviour. "
+    "Only when the trigger IS present do you judge Yes vs No from the answer definition.\n"
+    "For STATIC rules (no trigger): judge Yes vs No from the definition; use NA only if the "
+    "rule is genuinely inapplicable to the conversation.\n\n"
+    "Judge only from explicit content in the transcript text. Do not infer tone, prosody, or "
+    "off-transcript actions. Give a one-sentence reason (max 25 words) that PARAPHRASES the "
+    "evidence — never quote the transcript verbatim."
+)
+
+_SYNTH_SYSTEM = (
+    "You are a QA evaluation expert. You are given, for one rule, how often the recorded ground "
+    "truth labels disagree with a careful reading of the rule's own definition across ALL "
+    "conversations. Classify the gap between the description and the labels.\n\n"
     "Classify the gap type:\n"
-    "  DESCRIPTION_MISMATCH: The description evaluates criterion A but the GT data rewards criterion B. "
-    "The distinction between the Yes and No examples does not match what the description asks to evaluate.\n"
-    "  NO_GAP: The description accurately captures what the GT labels reward. The Yes/No distinction "
-    "matches the description's criterion.\n"
-    "  LABELLING_INCONSISTENCY: Near-identical or equivalent conversations receive opposite GT labels. "
-    "The data itself is inconsistent — the description is not the problem.\n\n"
-    "Non-hallucination constraint: Only report patterns directly evidenced by the provided examples. "
-    "Do not speculate about patterns not present in the data.\n"
-    "Use plain English — no markdown, no asterisks, no jargon."
+    "  DESCRIPTION_MISMATCH: The labels systematically reward a criterion the description does "
+    "not capture (the disagreements share a consistent direction/theme).\n"
+    "  NO_GAP: The description matches what the labels reward; disagreements are few or absent.\n"
+    "  LABELLING_INCONSISTENCY: Disagreements are scattered and contradictory — the data itself "
+    "is noisy, the description is not the problem.\n\n"
+    "Only report patterns evidenced by the provided summary. Use plain English — no markdown, "
+    "no asterisks."
 )
 
 
+def _normalize_label(value) -> str:
+    return _LABEL_MAP.get(str(value or "").strip().lower(), "NA")
+
+
+def diff_cases(
+    conv_verdicts: list[tuple[str, dict]],
+    ground_truth_map: dict,
+    rule_ids: list[str],
+) -> dict[str, list[dict]]:
+    """Diff per-conversation audit verdicts against ground truth → flagged cases per rule.
+
+    A case is flagged only when the definition-correct label (`should_be`) differs from the
+    recorded ground truth. Conversations with no GT entry for a rule are skipped. Pure function.
+    """
+    pre_audit_cases: dict[str, list[dict]] = {rid: [] for rid in rule_ids}
+    for conv_id, verdicts in conv_verdicts:
+        gt_by_rule = ground_truth_map.get(conv_id, {})
+        for rule_id, verdict in verdicts.items():
+            if rule_id not in pre_audit_cases:
+                continue
+            current_gt = gt_by_rule.get(rule_id)
+            if current_gt is None:
+                continue
+            should_be = _normalize_label(verdict.get("should_be"))
+            if should_be != current_gt:
+                pre_audit_cases[rule_id].append({
+                    "conversation_id": conv_id,
+                    "current_gt": current_gt,
+                    "should_be": should_be,
+                    "reason": str(verdict.get("reason") or "").strip()[:220],
+                })
+    return pre_audit_cases
+
+
+def _format_transcript(messages: list) -> str:
+    lines = []
+    for m in messages:
+        speaker = str(m.get("speaker", "unknown")).title()
+        lines.append(f"  {speaker}: {m.get('msg', '')}")
+    return "\n".join(lines) if lines else "  (no transcript)"
+
+
+def _rule_definition_block(rule: dict) -> str:
+    """Human-readable definition for one rule, used inside the judgement prompt."""
+    rule_id = rule["rule_id"]
+    is_dynamic = rule.get("rule_type") == "dynamic"
+    lines = [
+        f"Rule ID: {rule_id}",
+        f"Type: {'dynamic (has a trigger/scope condition)' if is_dynamic else 'static'}",
+    ]
+    if is_dynamic:
+        lines.append(f"Trigger / scope definition (is the rule applicable?):\n{rule.get('trigger_description') or '(none)'}")
+    lines.append(f"Answer definition (did the agent adhere?):\n{rule.get('description', '')}")
+    return "\n".join(lines)
+
+
+def _parse_verdicts(content: str, rule_ids: list[str]) -> dict[str, dict]:
+    """Full JSON parse first; fall back to per-object regex recovery. Never logs content."""
+    parsed: dict[str, dict] = {}
+
+    def _absorb(items):
+        if isinstance(items, list):
+            for obj in items:
+                if isinstance(obj, dict) and obj.get("rule_id") in rule_ids:
+                    parsed[obj["rule_id"]] = obj
+
+    raw = content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        _absorb(json.loads(raw))
+    except (json.JSONDecodeError, ValueError):
+        for match in re.finditer(r"\{[^{}]+\}", content, re.DOTALL):
+            try:
+                obj = json.loads(match.group())
+                if isinstance(obj, dict) and obj.get("rule_id") in rule_ids:
+                    parsed[obj["rule_id"]] = obj
+            except json.JSONDecodeError:
+                pass
+    return parsed
+
+
 async def pre_flight_gt_audit(state: OptimizationState) -> dict:
-    """Holistic GT alignment audit for ALL rules, runs once after csv_ingestion."""
+    """Per-conversation GT alignment audit over ALL conversations, runs once after csv_ingestion.
+
+    For every conversation we ask the model for the definition-correct label of every rule,
+    then flag conversations where that disagrees with the recorded ground truth. Findings are
+    surfaced per metric as a table plus an actionable "apply these relabels?" question.
+    """
     session_id = state["session_id"]
     rules = state["rules"]
     ground_truth_map = state["ground_truth_map"]
-    conversations_by_id = {c["conversation_id"]: c for c in state["conversations"]}
+    conversations = state["conversations"]
+    rule_ids = [r["rule_id"] for r in rules]
+    rules_by_id = {r["rule_id"]: r for r in rules}
 
-    session_store.update(session_id, {"current_phase": "analyzing_failures"})
+    session_store.update(session_id, {
+        "current_phase": "analyzing_failures",
+        "node_progress": {"node": "gt_audit", "step": 0, "total": len(conversations)},
+    })
     session_store.append_log(
         session_id,
-        f"Pre-flight GT audit: checking {len(rules)} rule(s) for description-GT alignment…",
+        f"Pre-flight GT audit: checking {len(rules)} rule(s) against {len(conversations)} conversation(s)…",
     )
 
     llm_config = state.get("llm_config", {})
@@ -55,49 +169,94 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
     session_store.append_trace(session_id, {
         "ts": datetime.now(tz=timezone.utc).isoformat(),
         "node": "pre_flight_gt_audit", "model": llm.model_name, "event": "start",
-        "details": {"rules": len(rules)},
+        "details": {"rules": len(rules), "conversations": len(conversations)},
     })
 
+    definitions_block = "\n\n".join(_rule_definition_block(r) for r in rules)
     sem = asyncio.Semaphore(settings.max_concurrent_llm_calls)
+    completed = 0
+
+    async def _judge_conversation(conv: dict) -> tuple[str, dict[str, dict]]:
+        nonlocal completed
+        conv_id = conv["conversation_id"]
+        prompt = (
+            f"Conversation transcript:\n{_format_transcript(conv.get('transcript', []))}\n\n"
+            f"Rules to judge:\n{definitions_block}\n\n"
+            "For EACH rule, return the correct label per its definition. "
+            "Respond with ONLY a JSON array, one object per rule:\n"
+            '[{"rule_id": "<id>", "should_be": "Yes|No|NA", "reason": "<paraphrased, max 25 words>"}]'
+        )
+        try:
+            async with sem:
+                response = await asyncio.wait_for(
+                    llm.ainvoke([
+                        SystemMessage(content=_JUDGE_SYSTEM),
+                        HumanMessage(content=prompt),
+                    ]),
+                    timeout=settings.llm_call_timeout,
+                )
+            verdicts = _parse_verdicts(response.content, rule_ids)
+        except Exception as exc:  # noqa: BLE001 — audit must not crash the run
+            logger.warning("session=%s conversation audit failed (%s) — skipping", session_id, type(exc).__name__)
+            verdicts = {}
+        finally:
+            completed += 1
+            session_store.set_node_progress(session_id, "gt_audit", completed, len(conversations))
+        return conv_id, verdicts
+
+    conv_verdicts = await asyncio.gather(*[_judge_conversation(c) for c in conversations])
+
+    # ── Diff each verdict against ground truth → flagged cases per rule ──────────
+    pre_audit_cases = diff_cases(conv_verdicts, ground_truth_map, rule_ids)
+
+    # ── Per-rule synthesis (keeps pivot text + optimizer discard-description feed) ──
     existing_pivot_asked = set(state.get("pivot_asked_rule_ids") or [])
 
-    async def _audit_rule(rule: dict) -> tuple[str, str | None]:
+    async def _synthesise(rule: dict) -> tuple[str, str]:
         rule_id = rule["rule_id"]
-        yes_cases = _sample_gt_cases(rule_id, "Yes", ground_truth_map, conversations_by_id)
-        no_cases = _sample_gt_cases(rule_id, "No", ground_truth_map, conversations_by_id)
-
-        if len(yes_cases) < 2 or len(no_cases) < 2:
-            logger.info(
-                "session=%s rule_id=%s pre-flight audit skipped (insufficient GT samples: %d yes, %d no)",
-                session_id, rule_id, len(yes_cases), len(no_cases),
-            )
-            session_store.append_log(
-                session_id,
-                f"  Pre-flight audit: {rule_id} — skipped "
-                f"(need ≥2 Yes and ≥2 No GT examples; found {len(yes_cases)} Yes, {len(no_cases)} No)",
-            )
-            return rule_id, None
-
+        cases = pre_audit_cases.get(rule_id, [])
+        evaluable = sum(1 for g in ground_truth_map.values() if g.get(rule_id) in ("Yes", "No"))
         async with sem:
-            findings = await _run_audit(rule_id, rule, yes_cases, no_cases, llm)
-
-        gap = _extract_gap_type(findings)
-        session_store.append_log(session_id, f"  Pre-flight audit: {rule_id} — {gap}")
+            findings = await _run_synthesis(rule_id, rule, cases, evaluable, len(conversations), llm)
         return rule_id, findings
 
-    audit_results = await asyncio.gather(*[_audit_rule(rule) for rule in rules])
+    synth_results = await asyncio.gather(*[_synthesise(r) for r in rules])
 
     pre_audit_results: dict[str, str] = {}
     pivot_questions: list[ClarifyingQuestion] = []
+    relabel_questions: list[ClarifyingQuestion] = []
     newly_pivot_asked: list[str] = []
 
-    for rule_id, findings in audit_results:
-        if findings is None:
-            continue
+    for rule_id, findings in synth_results:
         pre_audit_results[rule_id] = findings
+        cases = pre_audit_cases.get(rule_id, [])
+        gap = _extract_gap_type(findings)
+        session_store.append_log(
+            session_id, f"  GT audit: {rule_id} — {gap} ({len(cases)} case(s) flagged)"
+        )
+
+        display_name = rule_id.replace("__answer", "").replace("__trigger", "")
+
+        if cases:
+            relabel_questions.append(ClarifyingQuestion(
+                question_id=str(uuid.uuid4()),
+                parameter_name=rule_id,
+                question_text=(
+                    f"Ground-truth audit flagged {len(cases)} label(s) for '{display_name}' as "
+                    f"inconsistent with the definition. Apply these corrections and score accuracy "
+                    f"against the corrected ground truth?"
+                ),
+                rationale=(
+                    "Per-conversation GT audit found labels that contradict the rule definition. "
+                    "Accepting overlays the corrected labels (the source CSV is never changed)."
+                ),
+                question_type="gt_relabel",
+                cases=cases,
+                flagged_count=len(cases),
+                metric_display_name=display_name,
+            ))
 
         if "DESCRIPTION_MISMATCH" in findings and rule_id not in existing_pivot_asked:
-            display_name = rule_id.replace("__answer", "").replace("__trigger", "")
             pivot_questions.append(ClarifyingQuestion(
                 question_id=str(uuid.uuid4()),
                 parameter_name=rule_id,
@@ -110,47 +269,24 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
             ))
             newly_pivot_asked.append(rule_id)
 
+    total_flagged = sum(len(c) for c in pre_audit_cases.values())
     mismatch_count = sum(1 for f in pre_audit_results.values() if "DESCRIPTION_MISMATCH" in f)
     logger.info(
-        "session=%s pre-flight GT audit: %d rule(s) audited, %d mismatch(es)",
-        session_id, len(pre_audit_results), mismatch_count,
+        "session=%s pre-flight GT audit: %d rule(s), %d label(s) flagged, %d mismatch(es)",
+        session_id, len(pre_audit_results), total_flagged, mismatch_count,
     )
 
     return {
         "pre_audit_results": pre_audit_results,
-        "clarifying_questions": pivot_questions,
+        "pre_audit_cases": pre_audit_cases,
+        # gt_relabel questions first so the actionable tables surface before pivot prompts
+        "clarifying_questions": relabel_questions + pivot_questions,
         "pivot_asked_rule_ids": list(existing_pivot_asked | set(newly_pivot_asked)),
         "progress_log": [
-            f"Pre-flight GT audit: {len(pre_audit_results)} rule(s) checked, "
-            f"{mismatch_count} description mismatch(es) found"
+            f"Pre-flight GT audit: {len(conversations)} conversation(s) checked, "
+            f"{total_flagged} label(s) flagged across {sum(1 for c in pre_audit_cases.values() if c)} metric(s)"
         ],
     }
-
-
-def _sample_gt_cases(
-    rule_id: str,
-    label: str,
-    ground_truth_map: dict,
-    conversations_by_id: dict,
-) -> list[dict]:
-    cases = []
-    for conv_id, gt_by_rule in ground_truth_map.items():
-        if gt_by_rule.get(rule_id) == label:
-            conv = conversations_by_id.get(conv_id, {})
-            cases.append({"conversation_id": conv_id, "transcript": conv.get("transcript", [])})
-            if len(cases) >= _MAX_SAMPLES:
-                break
-    return cases
-
-
-def _format_transcript(messages: list) -> str:
-    lines = []
-    for m in messages[:_MAX_TRANSCRIPT_MESSAGES]:
-        speaker = m.get("speaker", "unknown").title()
-        lines.append(f"  {speaker}: {m.get('msg', '')}")
-    if len(messages) > _MAX_TRANSCRIPT_MESSAGES:
-        lines.append(f"  [...{len(messages) - _MAX_TRANSCRIPT_MESSAGES} more messages]")
-    return "\n".join(lines) if lines else "  (no transcript)"
 
 
 def _extract_gap_type(findings: str) -> str:
@@ -162,7 +298,6 @@ def _extract_gap_type(findings: str) -> str:
 
 
 def _extract_section(findings: str, prefix: str) -> str:
-    """Extract a single-line section value from the structured findings text."""
     for line in findings.split("\n"):
         stripped = line.strip()
         if stripped.startswith(prefix):
@@ -171,7 +306,6 @@ def _extract_section(findings: str, prefix: str) -> str:
 
 
 def _format_pivot_question(display_name: str, findings: str) -> str:
-    """Build a compact, human-readable pivot question from structured findings."""
     desc_evaluates = _extract_section(findings, "What the description evaluates:")
     gt_rewards = _extract_section(findings, "What GT data rewards:")
 
@@ -212,29 +346,36 @@ def _format_pivot_question(display_name: str, findings: str) -> str:
     )
 
 
-async def _run_audit(rule_id: str, rule: dict, yes_cases: list, no_cases: list, llm) -> str:
-    yes_text = "\n\n".join(
-        f"[Y{i + 1}] Conversation {c['conversation_id']}:\n{_format_transcript(c['transcript'])}"
-        for i, c in enumerate(yes_cases)
-    ) or "No Yes-labeled cases available."
+def _summarise_cases(cases: list[dict]) -> str:
+    """Aggregate flagged cases into a compact, transcript-free evidence summary."""
+    if not cases:
+        return "No labels disagreed with the definition."
+    directions: dict[str, int] = {}
+    for c in cases:
+        key = f"{c['current_gt']} → {c['should_be']}"
+        directions[key] = directions.get(key, 0) + 1
+    dir_text = "; ".join(f"{k}: {v}" for k, v in sorted(directions.items(), key=lambda kv: -kv[1]))
+    sample_reasons = [f"• {c['reason']}" for c in cases[:6] if c.get("reason")]
+    return f"Disagreement directions — {dir_text}\nRepresentative reasons:\n" + "\n".join(sample_reasons)
 
-    no_text = "\n\n".join(
-        f"[N{i + 1}] Conversation {c['conversation_id']}:\n{_format_transcript(c['transcript'])}"
-        for i, c in enumerate(no_cases)
-    ) or "No No-labeled cases available."
 
+async def _run_synthesis(
+    rule_id: str, rule: dict, cases: list[dict], evaluable: int, total_conversations: int, llm
+) -> str:
+    flagged = len(cases)
+    fraction = (flagged / evaluable) if evaluable else 0.0
     prompt = (
         f"Rule ID: {rule_id}\n"
-        f"Rule type: {rule.get('rule_type', 'answer')} | Speaker: {rule.get('speaker', 'agent')} | "
-        f"Evaluation type: {rule.get('evaluation_type', 'entire')}\n\n"
-        f"Description:\n{rule.get('description', '')}\n\n"
-        f"YES examples — conversations where the agent ADHERED (labelled 'Yes' in ground truth):\n"
-        f"{yes_text}\n\n"
-        f"NO examples — conversations where the agent did NOT ADHERE (labelled 'No' in ground truth):\n"
-        f"{no_text}\n\n"
-        "Identify the single clearest criterion that separates the Yes examples from the No examples. "
-        "Then check whether the description matches that criterion.\n\n"
-        "Respond using this EXACT format — be concise, one short phrase or sentence per field:\n\n"
+        f"Rule type: {rule.get('rule_type', 'answer')}\n\n"
+        f"Description:\n{rule.get('description', '')}\n"
+        + (f"\nTrigger definition:\n{rule.get('trigger_description')}\n" if rule.get("rule_type") == "dynamic" else "")
+        + (
+            f"\nAcross {total_conversations} conversations ({evaluable} with a Yes/No label), "
+            f"the recorded ground truth disagreed with the definition on {flagged} conversation(s) "
+            f"({fraction:.0%} of evaluable labels).\n\n"
+            f"{_summarise_cases(cases)}\n\n"
+        )
+        + "Respond using this EXACT format — one short phrase or sentence per field:\n\n"
         "Gap type: <LABELLING_INCONSISTENCY | NO_GAP | DESCRIPTION_MISMATCH>\n\n"
         "What the description evaluates: <one short phrase, max 12 words>\n"
         "What GT data rewards: <one short phrase, max 12 words>\n\n"
@@ -243,9 +384,8 @@ async def _run_audit(rule_id: str, rule: dict, yes_cases: list, no_cases: list, 
         "Revised optimization strategy:\n"
         "<one sentence max 30 words — or 'No changes needed.' if NO_GAP or LABELLING_INCONSISTENCY>"
     )
-
     response = await llm.ainvoke([
-        SystemMessage(content=_SYSTEM),
+        SystemMessage(content=_SYNTH_SYSTEM),
         HumanMessage(content=prompt),
     ])
     return response.content.strip()

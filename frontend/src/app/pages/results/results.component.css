@@ -245,6 +245,16 @@
   font-family: inherit; font-size: 0.82rem; color: #14532d;
   line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0;
 }
+.gt-audit-heading { font-size: 0.88rem; font-weight: 700; color: #14532d; margin-bottom: 6px; }
+.gt-audit-corrected-note { font-size: 0.8rem; color: #15803d; margin-bottom: 10px; font-weight: 600; }
+.gt-audit-table-wrap { overflow-x: auto; border: 1px solid #bbf7d0; border-radius: 6px; background: #fff; }
+.gt-audit-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.gt-audit-table th, .gt-audit-table td {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; color: #14532d;
+}
+.gt-audit-table th { background: #f0fdf4; font-weight: 600; color: #15803d; white-space: nowrap; }
+.gt-audit-table td code { font-size: 0.76rem; color: #4338ca; }
+.gt-audit-table tbody tr:last-child td { border-bottom: none; }
 
 /* Pivot report card */
 .pivot-report-card {

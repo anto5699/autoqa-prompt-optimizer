@@ -239,14 +239,18 @@ async def get_session(session_id: str) -> SessionStatusResponse:
         questions = []
     progress = live.get("progress_log") or session.get("progress_log", [])
 
+    pre_audit_cases = live.get("pre_audit_cases") or {}
     parameter_summary: dict[str, ParameterSummary] = {}
     for rule_id, record in (live.get("parameter_records") or {}).items():
+        audit_cases = pre_audit_cases.get(rule_id)
         parameter_summary[rule_id] = ParameterSummary(
             accuracy=record.get("current_accuracy", 0.0),
             status=record.get("status", "pending"),
             rca_findings=record.get("rca_findings"),
             alignment_audit=record.get("alignment_audit"),
             audit_iteration=record.get("audit_iteration"),
+            gt_audit_cases=audit_cases or None,
+            gt_audit_flagged_count=len(audit_cases) if audit_cases is not None else None,
         )
 
     na_detected = set(session.get("_na_detected_parameters", []))

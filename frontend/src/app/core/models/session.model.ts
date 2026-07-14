@@ -30,12 +30,23 @@ export interface MetricConfig {
   n_messages?: number;
 }
 
+export interface GtAuditCase {
+  conversation_id: string;
+  current_gt: string;
+  should_be: string;
+  reason: string;
+}
+
 export interface ClarifyingQuestion {
   question_id: string;
   parameter_name: string;
   question_text: string;
   rationale: string;
-  question_type?: string;  // "ambiguity" | "pivot"
+  question_type?: string;  // "ambiguity" | "pivot" | "gt_relabel"
+  // gt_relabel questions only:
+  cases?: GtAuditCase[];
+  flagged_count?: number;
+  metric_display_name?: string;
 }
 
 export interface ParameterSummary {
@@ -44,6 +55,8 @@ export interface ParameterSummary {
   rca_findings?: string;
   alignment_audit?: string;
   audit_iteration?: number;
+  gt_audit_cases?: GtAuditCase[];
+  gt_audit_flagged_count?: number;
 }
 
 export interface CreateSessionResponse {

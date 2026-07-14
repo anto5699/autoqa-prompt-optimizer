@@ -246,10 +246,31 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
           <strong>Regression Warning:</strong> {{ e.val.regression_warning.message }}
         </div>
 
-        <!-- Pre-flight GT Audit -->
-        <div *ngIf="e.val.pre_audit_result" class="print-pre-audit">
-          <div class="print-pre-audit-title">Pre-flight GT Audit</div>
-          <pre class="print-pre-audit-text">{{ e.val.pre_audit_result }}</pre>
+        <!-- Ground Truth Audit -->
+        <div *ngIf="e.val.gt_audit_cases?.length || e.val.pre_audit_result" class="print-pre-audit">
+          <div class="print-pre-audit-title">Ground Truth Audit</div>
+          <ng-container *ngIf="e.val.gt_audit_cases?.length; else printPreAuditText">
+            <div class="print-gt-heading">{{ cleanName(e.key) }} — {{ e.val.gt_audit_cases!.length }} case(s) flagged</div>
+            <div *ngIf="e.val.gt_corrections_applied?.length" class="print-gt-corrected">
+              {{ e.val.gt_corrections_applied!.length }} label(s) corrected — accuracy scored against corrected ground truth.
+            </div>
+            <table class="print-gt-table">
+              <thead>
+                <tr><th>Conversation</th><th>Current GT</th><th>Should Be</th><th>Why</th></tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let c of e.val.gt_audit_cases">
+                  <td><code>{{ shortConv(c.conversation_id) }}</code></td>
+                  <td>{{ gtLabel(c.current_gt) }}</td>
+                  <td>{{ gtLabel(c.should_be) }}</td>
+                  <td>{{ c.reason }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </ng-container>
+          <ng-template #printPreAuditText>
+            <pre class="print-pre-audit-text">{{ e.val.pre_audit_result }}</pre>
+          </ng-template>
         </div>
 
       </div>
@@ -380,6 +401,12 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
     .print-pre-audit { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 10px 14px; margin-top: 10px; }
     .print-pre-audit-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #15803d; margin-bottom: 6px; }
     .print-pre-audit-text { font-family: inherit; font-size: 0.82rem; color: #14532d; line-height: 1.6; white-space: pre-wrap; word-break: break-word; margin: 0; }
+    .print-gt-heading { font-size: 0.85rem; font-weight: 700; color: #14532d; margin-bottom: 4px; }
+    .print-gt-corrected { font-size: 0.78rem; font-weight: 600; color: #15803d; margin-bottom: 8px; }
+    .print-gt-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    .print-gt-table th, .print-gt-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #d1fae5; vertical-align: top; color: #14532d; }
+    .print-gt-table th { background: #dcfce7; font-weight: 600; color: #15803d; }
+    .print-gt-table td code { color: #3730a3; }
 
     @media print {
       .print-loading { display: none; }
@@ -434,6 +461,15 @@ export class PrintReportComponent implements OnInit {
     navigator.clipboard.writeText(text).catch(() => {});
     this.copiedPdf[key] = true;
     setTimeout(() => this.copiedPdf[key] = false, 2000);
+  }
+
+  cleanName(name: string): string { return name.replace(/__answer$/, '').replace(/__trigger$/, ''); }
+  shortConv(id: string): string { return id.split('-').slice(0, 2).join('-'); }
+  gtLabel(v: string): string {
+    if (v === 'Yes') return 'Yes (Adhered)';
+    if (v === 'No') return 'No (Not Adhered)';
+    if (v === 'NA') return 'NA (Not Applicable)';
+    return v;
   }
 
   pct(v: number): string { return (v * 100).toFixed(1) + '%'; }

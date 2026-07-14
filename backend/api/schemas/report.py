@@ -31,6 +31,19 @@ class PivotInfo(BaseModel):
     original_description: str
 
 
+class GtAuditCase(BaseModel):
+    conversation_id: str
+    current_gt: str
+    should_be: str
+    reason: str
+
+
+class GtCorrection(BaseModel):
+    conversation_id: str
+    from_gt: str
+    to_gt: str
+
+
 class ParameterReport(BaseModel):
     status: str
     version: Optional[str] = None
@@ -54,6 +67,9 @@ class ParameterReport(BaseModel):
     pivot_approved: bool = False
     pivot_info: Optional[PivotInfo] = None
     pre_audit_result: Optional[str] = None
+    gt_audit_cases: Optional[List[GtAuditCase]] = None
+    gt_audit_flagged_count: Optional[int] = None
+    gt_corrections_applied: Optional[List[GtCorrection]] = None
 
 
 class ReportSummary(BaseModel):

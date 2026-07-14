@@ -68,6 +68,26 @@ def test_na_gt_with_wrong_pred_in_denominator():
     assert result["na_correct"] == 0
 
 
+def test_wrong_na_pred_counted_and_in_denominator():
+    # Trigger UNDER-fire: GT is in-scope (Yes/No) but the evaluator predicted NA.
+    preds = {"c1": "NA", "c2": "NA", "c3": "Yes"}
+    gt = gt_map({"c1": "Yes", "c2": "No", "c3": "Yes"})
+    result = compute_metrics(preds, gt, "r1")
+    # c1, c2 → wrong_na_pred (wrong); c3 → TP (correct). Accuracy = 1/3.
+    assert result["wrong_na_pred"] == 2
+    assert result["tp"] == 1
+    assert result["accuracy"] == pytest.approx(1 / 3)
+    # wrong_na_pred must be part of the denominator, not silently dropped
+    assert result["na_correct"] == 0 and result["na_wrong"] == 0
+
+
+def test_wrong_na_pred_key_always_present():
+    # The field must be returned even when zero, so consumers never KeyError.
+    result = compute_metrics({"c1": "Yes"}, gt_map({"c1": "Yes"}), "r1")
+    assert "wrong_na_pred" in result
+    assert result["wrong_na_pred"] == 0
+
+
 def test_3class_mixed_accuracy():
     # c1: GT=Yes, pred=Yes → TP
     # c2: GT=No, pred=No → TN

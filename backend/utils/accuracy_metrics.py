@@ -54,5 +54,6 @@ def compute_metrics(
         "fn": fn,
         "na_correct": na_correct,
         "na_wrong": na_wrong,
+        "wrong_na_pred": wrong_na_pred,
         "not_applicable_count": na_correct + na_wrong,  # kept for backward compat with report
     }

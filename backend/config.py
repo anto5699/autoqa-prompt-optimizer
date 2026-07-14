@@ -198,7 +198,7 @@ def get_llm(model: str = None, api_key: str = None, base_url: str = None, purpos
             azure_deployment=azure_deployment,
             api_version="2024-02-01",
             max_completion_tokens=15000,
-            timeout=180,
+            timeout=settings.llm_call_timeout,
             api_key=api_key or settings.openai_api_key or None,
         )
 
@@ -216,7 +216,7 @@ def get_llm(model: str = None, api_key: str = None, base_url: str = None, purpos
     return ChatOpenAI(
         model=effective_model,
         max_completion_tokens=15000,
-        timeout=180,
+        timeout=settings.llm_call_timeout,
         api_key=api_key or settings.openai_api_key or None,
         base_url=effective_base_url,
         **extra_params,

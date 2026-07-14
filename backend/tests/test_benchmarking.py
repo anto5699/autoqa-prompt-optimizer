@@ -195,3 +195,33 @@ def test_dynamic_metric_regression_reverts_both_descriptions():
     r = result["parameter_records"]["metric"]
     assert r["current_description"] == "answer v1"
     assert r["trigger_description"] == "trigger v1"
+
+
+# ── NA-collapse warning ────────────────────────────────────────────────────────
+
+def _run_with_session(records, gt_map, session_id, **kwargs):
+    """Run benchmarking with a real session in the store so append_log lands somewhere."""
+    from utils.session_store import session_store
+    session_store.add(session_id, {"progress_log": []})
+    state = _state(records, gt_map, **kwargs)
+    state["session_id"] = session_id
+    asyncio.run(benchmarking(state))
+    return session_store.get(session_id)["progress_log"]
+
+
+def test_na_collapse_warning_emitted_when_over_qualifying():
+    # All 4 predicted NA (100%); ground truth has 0% NA → 100% > 0% + 20pp → warn.
+    preds = {"c1": "NA", "c2": "NA", "c3": "NA", "c4": "NA"}
+    gt = {c: {"r1": "Yes"} for c in preds}
+    record = _record("desc", preds)
+    log = _run_with_session({"r1": record}, gt, "na-collapse-1")
+    assert any("over-qualifying NA" in line for line in log)
+
+
+def test_na_collapse_warning_not_emitted_within_threshold():
+    # Predicted NA rate (25%) is within 20pp of ground-truth NA rate (25%) → no warning.
+    preds = {"c1": "NA", "c2": "Yes", "c3": "No", "c4": "Yes"}
+    gt = {"c1": {"r1": "NA"}, "c2": {"r1": "Yes"}, "c3": {"r1": "No"}, "c4": {"r1": "Yes"}}
+    record = _record("desc", preds)
+    log = _run_with_session({"r1": record}, gt, "na-collapse-2")
+    assert not any("over-qualifying NA" in line for line in log)

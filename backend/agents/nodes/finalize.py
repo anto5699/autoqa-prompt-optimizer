@@ -176,14 +176,18 @@ async def finalize(state: OptimizationState) -> dict:
 
         # --- Metric-quality signals (Change 4) ---
         _labels = [gt_map[c].get(rule_id) for c in gt_map if gt_map[c].get(rule_id) is not None]
-        n_total = len(_labels)                                   # all scored conversations
         evaluable_n = sum(1 for v in _labels if v in ("Yes", "No"))  # Yes/No rows — fragile dimension
         low_confidence_metric = evaluable_n < settings.min_evaluable_n     # 5c
-        accuracy_ci = wilson_interval(final_acc, n_total)                  # 5c
+        # CI is on evaluable_n — the Yes/No denominator accuracy is actually computed over
+        # (NA rows are excluded from accuracy), so the interval reflects the true evidence base;
+        # using n_total understated uncertainty for high-NA metrics.
+        accuracy_ci = wilson_interval(final_acc, evaluable_n)              # 5c
         _pa_cases = pre_audit_cases.get(rule_id) or []
         _flagged = len(_pa_cases)
+        # Clamp to [0, 1]: flagged counts NA-flips too, so it can exceed evaluable_n on tiny
+        # high-NA metrics; an unclamped score would go negative. 0.0 == maximally inconsistent.
         label_consistency_score = (                                        # 5b
-            round(1 - (_flagged / evaluable_n), 4) if evaluable_n else None
+            round(max(0.0, min(1.0, 1 - (_flagged / evaluable_n))), 4) if evaluable_n else None
         )
         # Change 3 — consensus confidence on proposed relabels (all 1.0 when single-judge)
         relabels_high_confidence = sum(1 for c in _pa_cases if c.get("confidence", 1.0) >= 0.999)

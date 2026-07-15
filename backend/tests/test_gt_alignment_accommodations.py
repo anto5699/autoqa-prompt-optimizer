@@ -9,9 +9,90 @@ import asyncio
 import pytest
 
 from agents.nodes.benchmarking import _iters_without_improvement, benchmarking
+from agents.nodes.gt_alignment_audit import _no_progress
 from agents.nodes.pre_flight_gt_audit import _consensus_verdicts, diff_cases
+from config import settings
 from utils.accuracy_metrics import compute_metrics, wilson_interval
 from utils.session_store import session_store
+
+
+def _hist(accs):
+    return {"iteration_history": [{"accuracy": a} for a in accs]}
+
+
+# ─────────────────── audit trigger: no-progress incl. oscillation ───────────────────
+
+def test_no_progress_tight_flat():
+    # spread < stagnation_spread over the window → stagnant
+    assert _no_progress(_hist([0.5, 0.5, 0.5])) is True
+
+
+def test_no_progress_oscillation_without_improvement():
+    # not tight-flat (spread 0.08) but best (0.5) never beaten for >= window iterations
+    assert _no_progress(_hist([0.5, 0.4, 0.45, 0.48])) is True
+
+
+def test_no_progress_false_when_improving():
+    assert _no_progress(_hist([0.5, 0.6, 0.7])) is False
+
+
+def test_no_progress_false_with_short_history():
+    assert _no_progress(_hist([0.5, 0.4])) is False
+
+
+def test_no_progress_respects_disable_flag(monkeypatch):
+    monkeypatch.setattr(settings, "audit_on_no_improvement", False)
+    # oscillation no longer counts when disabled; tight-flat still does
+    assert _no_progress(_hist([0.5, 0.4, 0.45, 0.48])) is False
+    assert _no_progress(_hist([0.5, 0.5, 0.5])) is True
+
+
+# ─────────────────── finalize: 5b clamp + CI denominator ───────────────────
+
+def _finalize_record(rid, accuracy, status="max_iterations_reached"):
+    return {
+        "rule_id": rid, "rule_type": "dynamic", "version": "v1", "speaker": "agent",
+        "trigger_description": "t", "evaluation_type": "entire", "n_messages": 0,
+        "current_description": "desc", "original_description": "desc",
+        "iteration_history": [{"iteration": 0, "accuracy": accuracy, "description": "desc"}],
+        "current_predictions": {"c1": "Yes", "c2": "No", "c3": "NA", "c4": "NA", "c5": "NA"},
+        "current_accuracy": accuracy, "current_precision": 0.0, "current_recall": 0.0,
+        "current_f1": 0.0, "true_positives": 1, "false_positives": 0, "true_negatives": 1,
+        "false_negatives": 0, "not_applicable_count": 3, "rca_findings": None,
+        "optimization_notes": None, "status": status,
+        "initial_accuracy": accuracy, "best_accuracy": accuracy, "best_description": "desc",
+    }
+
+
+def _finalize_state(records, pre_audit_cases):
+    # gt: 2 evaluable (Yes/No) + 3 NA → evaluable_n = 2, n_total = 5
+    gt = {"c1": {r: "Yes" for r in records}, "c2": {r: "No" for r in records},
+          "c3": {r: "NA" for r in records}, "c4": {r: "NA" for r in records},
+          "c5": {r: "NA" for r in records}}
+    return {
+        "session_id": "fin", "parameter_records": records,
+        "parameters_below_target": [], "parameters_meeting_target": list(records),
+        "current_iteration": 3, "accuracy_target": 0.9,
+        "conversations": [{"id": c} for c in ("c1", "c2", "c3", "c4", "c5")],
+        "ground_truth_map": gt, "pre_audit_cases": pre_audit_cases, "progress_log": [],
+    }
+
+
+def test_finalize_label_consistency_clamped_and_ci_on_evaluable_n():
+    from agents.nodes.finalize import finalize
+
+    rec = _finalize_record("r1", 0.5)
+    # 4 flagged cases > evaluable_n (2) → unclamped score would be 1 - 4/2 = -1.0
+    cases = [{"conversation_id": f"c{i}", "current_gt": "NA", "should_be": "Yes",
+              "reason": "x", "confidence": 1.0} for i in range(4)]
+    state = _finalize_state({"r1": rec}, {"r1": cases})
+    report = asyncio.run(finalize(state))["final_report"]["parameters"]["r1"]
+
+    assert report["evaluable_n"] == 2
+    assert report["label_consistency_score"] == 0.0            # clamped, not negative
+    # CI is on evaluable_n (2), NOT on n_total (5)
+    assert report["accuracy_ci"] == wilson_interval(0.5, 2)
+    assert report["accuracy_ci"] != wilson_interval(0.5, 5)
 
 
 # ─────────────────────────── pure helpers ───────────────────────────

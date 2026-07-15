@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agents.nodes.benchmarking import _iters_without_improvement
 from agents.state import OptimizationState
 from config import get_llm, settings
 from utils.session_store import session_store
@@ -55,6 +56,25 @@ def _is_stagnant(record: dict, min_entries: int | None = None) -> bool:
     return (max(recent) - min(recent)) < settings.stagnation_spread
 
 
+def _no_progress(record: dict) -> bool:
+    """A rule that is not making progress and should be audited.
+
+    Two shapes count: (1) tight-flat stagnation (`_is_stagnant`), and (2) — when
+    `audit_on_no_improvement` is set — oscillation, where the raw accuracy is not tight-flat but
+    `best` has not been beaten for `stagnation_window` iterations. Without (2), an oscillating-down
+    rule never gets audited and so can never reach the stalled / label_limited halts (both gated on
+    a prior audit). Requires at least `stagnation_window` history entries for either shape.
+    """
+    if _is_stagnant(record):
+        return True
+    if not settings.audit_on_no_improvement:
+        return False
+    history = record.get("iteration_history", [])
+    if len(history) < settings.stagnation_window:
+        return False
+    return _iters_without_improvement(history, settings.min_improvement_delta) >= settings.stagnation_window
+
+
 async def gt_alignment_audit(state: OptimizationState) -> dict:
     session_id = state["session_id"]
     iteration = state["current_iteration"]
@@ -65,7 +85,7 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
 
     stagnant_rules = [
         rule_id for rule_id in below_target
-        if _is_stagnant(records[rule_id])
+        if _no_progress(records[rule_id])
         and _should_audit(records[rule_id], iteration)
     ]
 

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     stagnation_window: int = 3          # iterations inspected for a flat run
     stagnation_spread: float = 0.03     # max-min accuracy spread that counts as "flat"
     min_iters_between_audits: int = 3   # cadence gate for the mid-loop GT alignment audit
+    # Also audit a rule that is not improving but OSCILLATING (raw accuracy not tight-flat, yet
+    # best has not been beaten for stagnation_window iterations). Without this, an oscillating-down
+    # rule never gets audited and so can never reach the stalled / label_limited halts.
+    audit_on_no_improvement: bool = True
 
     # --- No-progress / oscillation early-stop (Change 1) ---
     stall_patience: int = 3             # flat, post-audit iterations before a rule is stopped

@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from openai import APIConnectionError, APIStatusError, RateLimitError
 
-from agents.state import OptimizationState
+from agents.state import LOCKED_STATUSES, OptimizationState
 from config import get_llm, settings
 from utils.session_store import session_store
 
@@ -89,11 +89,11 @@ async def evaluator(state: OptimizationState) -> dict:
 
     records = dict(state["parameter_records"])
 
-    # Only submit non-converged rules to the LLM
+    # Only submit still-optimizing rules to the LLM (skip converged / stalled / label_limited)
     rules_to_evaluate = {
         rule_id: record
         for rule_id, record in records.items()
-        if record.get("status") != "converged"
+        if record.get("status") not in LOCKED_STATUSES
     }
 
     # Early return before any mutations if all rules are already converged
@@ -233,11 +233,11 @@ async def _evaluate_conversation(
     # Partition records by version; skip converged rules
     v1_records = {
         rid: rec for rid, rec in parameter_records.items()
-        if rec.get("version", "v1") == "v1" and rec.get("status") not in ("converged",)
+        if rec.get("version", "v1") == "v1" and rec.get("status") not in LOCKED_STATUSES
     }
     v2_records = {
         rid: rec for rid, rec in parameter_records.items()
-        if rec.get("version") == "v2" and rec.get("status") not in ("converged",)
+        if rec.get("version") == "v2" and rec.get("status") not in LOCKED_STATUSES
     }
 
     n_v1_batches = -(-len(v1_records) // batch_size) if v1_records else 0

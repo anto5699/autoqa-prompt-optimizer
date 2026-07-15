@@ -82,8 +82,61 @@ def diff_cases(
                     "current_gt": current_gt,
                     "should_be": should_be,
                     "reason": str(verdict.get("reason") or "").strip()[:220],
+                    # Change 3: consensus confidence (1.0 for single-judge runs)
+                    "confidence": round(float(verdict.get("confidence", 1.0)), 4),
                 })
     return pre_audit_cases
+
+
+def _consensus_verdicts(
+    runs_results: list[list[tuple[str, dict]]], rule_ids: list[str]
+) -> list[tuple[str, dict]]:
+    """Merge K judge passes into one verdict per (conversation, rule) via majority vote.
+
+    confidence = votes_for_winner / K. Tie → the primary run's label (deterministic). With K==1
+    this returns the single run's verdicts unchanged, each with confidence 1.0. Pure function.
+    """
+    from collections import Counter
+
+    per_conv: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for run in runs_results:
+        for conv_id, verdicts in run:
+            if conv_id not in per_conv:
+                per_conv[conv_id] = []
+                order.append(conv_id)
+            per_conv[conv_id].append(verdicts or {})
+
+    n_runs = len(runs_results) or 1
+    out: list[tuple[str, dict]] = []
+    for conv_id in order:
+        vlist = per_conv[conv_id]
+        merged: dict[str, dict] = {}
+        for rid in rule_ids:
+            labels: list[str] = []
+            reasons: dict[str, str] = {}
+            for v in vlist:
+                obj = v.get(rid)
+                if not obj:
+                    continue
+                lab = _normalize_label(obj.get("should_be"))
+                labels.append(lab)
+                reasons.setdefault(lab, str(obj.get("reason") or ""))
+            if not labels:
+                continue
+            counts = Counter(labels)
+            best_count = counts.most_common(1)[0][1]
+            winners = [lab for lab, c in counts.items() if c == best_count]
+            primary_obj = vlist[0].get(rid) if vlist else None
+            primary = _normalize_label(primary_obj.get("should_be")) if primary_obj else None
+            winner = primary if primary in winners else winners[0]
+            merged[rid] = {
+                "should_be": winner,
+                "reason": reasons.get(winner, ""),
+                "confidence": round(best_count / n_runs, 4),
+            }
+        out.append((conv_id, merged))
+    return out
 
 
 def _format_transcript(messages: list) -> str:
@@ -174,9 +227,23 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
 
     definitions_block = "\n\n".join(_rule_definition_block(r) for r in rules)
     sem = asyncio.Semaphore(settings.max_concurrent_llm_calls)
+
+    # Consensus judges (Change 3): default 1 run == today's single-model audit. Additional runs
+    # use a distinct model when configured (genuine independence), else resample the primary model.
+    runs = max(1, min(5, settings.gt_audit_consensus_runs))
+    consensus_model = (settings.gt_audit_consensus_model or "").strip()
+    judge_llms = [llm]
+    for _ in range(runs - 1):
+        judge_llms.append(get_llm(
+            model=consensus_model,
+            api_key=llm_config.get("optimizer_api_key") or llm_config.get("api_key"),
+            base_url=llm_config.get("optimizer_base_url") or llm_config.get("base_url"),
+            purpose="optimizer",
+        ) if consensus_model else llm)
+    total_calls = runs * len(conversations)
     completed = 0
 
-    async def _judge_conversation(conv: dict) -> tuple[str, dict[str, dict]]:
+    async def _judge_conversation(conv: dict, judge_llm) -> tuple[str, dict[str, dict]]:
         nonlocal completed
         conv_id = conv["conversation_id"]
         prompt = (
@@ -189,7 +256,7 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
         try:
             async with sem:
                 response = await asyncio.wait_for(
-                    llm.ainvoke([
+                    judge_llm.ainvoke([
                         SystemMessage(content=_JUDGE_SYSTEM),
                         HumanMessage(content=prompt),
                     ]),
@@ -201,12 +268,17 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
             verdicts = {}
         finally:
             completed += 1
-            session_store.set_node_progress(session_id, "gt_audit", completed, len(conversations))
+            session_store.set_node_progress(session_id, "gt_audit", completed, total_calls)
         return conv_id, verdicts
 
-    conv_verdicts = await asyncio.gather(*[_judge_conversation(c) for c in conversations])
+    # Run each judge over all conversations (concurrency bounded by the shared semaphore).
+    runs_results = [
+        await asyncio.gather(*[_judge_conversation(c, judge_llm) for c in conversations])
+        for judge_llm in judge_llms
+    ]
+    conv_verdicts = _consensus_verdicts(runs_results, rule_ids)
 
-    # ── Diff each verdict against ground truth → flagged cases per rule ──────────
+    # ── Diff consensus verdicts against ground truth → flagged cases per rule ──────────
     pre_audit_cases = diff_cases(conv_verdicts, ground_truth_map, rule_ids)
 
     # ── Per-rule synthesis (keeps pivot text + optimizer discard-description feed) ──

@@ -210,12 +210,12 @@ def _run_with_session(records, gt_map, session_id, **kwargs):
 
 
 def test_na_collapse_warning_emitted_when_over_qualifying():
-    # All 4 predicted NA (100%); ground truth has 0% NA → 100% > 0% + 20pp → warn.
+    # All 4 predicted NA (100%); ground truth has 0% NA → 100% > 0% + 20pp → warn (5d: NA divergence).
     preds = {"c1": "NA", "c2": "NA", "c3": "NA", "c4": "NA"}
     gt = {c: {"r1": "Yes"} for c in preds}
     record = _record("desc", preds)
     log = _run_with_session({"r1": record}, gt, "na-collapse-1")
-    assert any("over-qualifying NA" in line for line in log)
+    assert any("NA divergence" in line for line in log)
 
 
 def test_na_collapse_warning_not_emitted_within_threshold():
@@ -224,4 +224,4 @@ def test_na_collapse_warning_not_emitted_within_threshold():
     gt = {"c1": {"r1": "NA"}, "c2": {"r1": "Yes"}, "c3": {"r1": "No"}, "c4": {"r1": "Yes"}}
     record = _record("desc", preds)
     log = _run_with_session({"r1": record}, gt, "na-collapse-2")
-    assert not any("over-qualifying NA" in line for line in log)
+    assert not any("NA divergence" in line for line in log)

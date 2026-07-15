@@ -14,6 +14,26 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:4200"
 
+    # --- Stagnation detection (centralised; previously triplicated as literals) ---
+    stagnation_window: int = 3          # iterations inspected for a flat run
+    stagnation_spread: float = 0.03     # max-min accuracy spread that counts as "flat"
+    min_iters_between_audits: int = 3   # cadence gate for the mid-loop GT alignment audit
+
+    # --- No-progress / oscillation early-stop (Change 1) ---
+    stall_patience: int = 3             # flat, post-audit iterations before a rule is stopped
+    min_improvement_delta: float = 0.01  # best-accuracy gain that counts as "improvement"
+
+    # --- Actionable LABELLING_INCONSISTENCY halt (Change 2) ---
+    enable_label_limited_halt: bool = True
+
+    # --- Consensus confidence on GT relabel proposals (Change 3) ---
+    gt_audit_consensus_runs: int = 1    # 1 == today's behaviour (single judge). Bounded 1..5.
+    gt_audit_consensus_model: str = ""  # optional distinct judge model for independence
+
+    # --- Metric-quality signals (Change 4) ---
+    min_evaluable_n: int = 10           # below this, a metric is annotated low-confidence (5c)
+    enable_prediction_confidence: bool = False  # 5a — edits eval prompt; OFF by default
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

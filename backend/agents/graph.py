@@ -13,6 +13,7 @@ from agents.nodes.pre_flight_gt_audit import pre_flight_gt_audit
 from agents.nodes.prompt_optimizer import prompt_optimizer
 from agents.nodes.rca_analyzer import rca_analyzer
 from agents.state import OptimizationState
+from config import settings
 
 
 def convergence_check(state: OptimizationState) -> str:
@@ -27,17 +28,18 @@ def _needs_alignment_audit(state: OptimizationState) -> str:
     records = state["parameter_records"]
     below = state["parameters_below_target"]
     current_iteration = state["current_iteration"]
+    window = settings.stagnation_window
     for rule_id in below:
         record = records.get(rule_id, {})
         history = record.get("iteration_history", [])
-        if len(history) < 3:
+        if len(history) < window:
             continue
-        recent = [h["accuracy"] for h in history[-3:]]
-        if (max(recent) - min(recent)) >= 0.03:
+        recent = [h["accuracy"] for h in history[-window:]]
+        if (max(recent) - min(recent)) >= settings.stagnation_spread:
             continue
         # Stagnant — check if audit is due
         last_audit = record.get("audit_iteration")
-        if last_audit is None or (current_iteration - last_audit) >= 3:
+        if last_audit is None or (current_iteration - last_audit) >= settings.min_iters_between_audits:
             return "gt_alignment_audit"
     return "mid_loop_clarification"
 

@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agents.state import OptimizationState
 from config import get_llm, settings
+from utils.accuracy_metrics import wilson_interval
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
@@ -106,14 +107,21 @@ async def finalize(state: OptimizationState) -> dict:
     below_target = set(state["parameters_below_target"])
 
     for rule_id, record in records.items():
-        if rule_id in below_target:
-            records[rule_id] = {**record, "status": "max_iterations_reached"}
-        else:
-            records[rule_id] = {**record, "status": "converged"}
+        # Only rules still actively optimizing at the cap become max_iterations_reached.
+        # Preserve terminal statuses set upstream (converged / stalled / label_limited) so their
+        # stop reason survives into the report.
+        if rule_id in below_target or record.get("status") == "optimizing":
+            records[rule_id] = {
+                **record,
+                "status": "max_iterations_reached",
+                "stop_reason": record.get("stop_reason") or "max_iterations_reached",
+            }
+        elif record.get("status") == "converged" and not record.get("stop_reason"):
+            records[rule_id] = {**record, "stop_reason": "converged"}
 
     total = len(records)
     meeting = [rid for rid, r in records.items() if r["status"] == "converged"]
-    not_meeting = [rid for rid, r in records.items() if r["status"] == "max_iterations_reached"]
+    not_meeting = [rid for rid, r in records.items() if r["status"] != "converged"]
     overall_accuracy = (
         sum(r["current_accuracy"] for r in records.values()) / total if total else 0.0
     )
@@ -165,6 +173,26 @@ async def finalize(state: OptimizationState) -> dict:
                 "reason": record.get("alignment_audit") or "",
                 "original_description": record.get("original_description") or "",
             }
+
+        # --- Metric-quality signals (Change 4) ---
+        _labels = [gt_map[c].get(rule_id) for c in gt_map if gt_map[c].get(rule_id) is not None]
+        n_total = len(_labels)                                   # all scored conversations
+        evaluable_n = sum(1 for v in _labels if v in ("Yes", "No"))  # Yes/No rows — fragile dimension
+        low_confidence_metric = evaluable_n < settings.min_evaluable_n     # 5c
+        accuracy_ci = wilson_interval(final_acc, n_total)                  # 5c
+        _pa_cases = pre_audit_cases.get(rule_id) or []
+        _flagged = len(_pa_cases)
+        label_consistency_score = (                                        # 5b
+            round(1 - (_flagged / evaluable_n), 4) if evaluable_n else None
+        )
+        # Change 3 — consensus confidence on proposed relabels (all 1.0 when single-judge)
+        relabels_high_confidence = sum(1 for c in _pa_cases if c.get("confidence", 1.0) >= 0.999)
+        relabels_contested = _flagged - relabels_high_confidence
+        _confidences = record.get("current_confidences") or {}             # 5a (empty unless enabled)
+        low_confidence_prediction_count = sum(
+            1 for v in _confidences.values() if str(v).lower() == "low"
+        ) if _confidences else None
+
         parameters_report[rule_id] = {
             "status": record["status"],
             "rule_type": record.get("rule_type", "answer"),
@@ -202,6 +230,18 @@ async def finalize(state: OptimizationState) -> dict:
                 len(pre_audit_cases[rule_id]) if rule_id in pre_audit_cases else None
             ),
             "gt_corrections_applied": gt_corrections_applied.get(rule_id) or None,
+            # --- New measurable signals ---
+            "stop_reason": record.get("stop_reason"),
+            "iterations_without_improvement": record.get("iterations_without_improvement"),
+            "alignment_audit": record.get("alignment_audit"),  # surfaced for label_limited too
+            "na_divergence": record.get("na_divergence"),
+            "label_consistency_score": label_consistency_score,
+            "low_confidence_metric": low_confidence_metric,
+            "evaluable_n": evaluable_n,
+            "accuracy_ci": accuracy_ci,
+            "low_confidence_prediction_count": low_confidence_prediction_count,
+            "relabels_high_confidence": relabels_high_confidence,
+            "relabels_contested": relabels_contested,
         }
 
     # Generate plain-language report summaries for every parameter in parallel
@@ -292,9 +332,26 @@ def _build_regression_warning(record: dict, initial_accuracy: float, final_accur
 
 
 def _build_recommendations(record: dict) -> list[str]:
-    if record["status"] == "converged" or not record.get("rca_findings"):
+    if record["status"] == "converged":
         return []
-    recs = [
+    # Change 2 — label inconsistency: relabelling, not description rewriting, is the fix.
+    if record.get("status") == "label_limited":
+        return [
+            "Ground-truth labels contradict the rule definition (LABELLING_INCONSISTENCY) — "
+            "relabel the inconsistent conversations via the GT-audit flow. Do NOT keep rewriting "
+            "the description; no wording can satisfy inconsistent labels.",
+            "Decide the intended standard for this metric and re-label consistently to it.",
+        ]
+    recs: list[str] = []
+    # Change 1 — stalled: make the no-progress diagnosis explicit.
+    if record.get("status") == "stalled":
+        recs.append(
+            "Optimization made no progress after a GT alignment audit — the ceiling is likely the "
+            "labels or an under-specified definition, not the wording. Review label quality first."
+        )
+    if not record.get("rca_findings"):
+        return recs
+    recs += [
         "Review the RCA findings and manually refine the rule description.",
         "Consider whether this criterion is automatable from transcript evidence alone.",
     ]

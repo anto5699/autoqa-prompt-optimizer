@@ -9,19 +9,28 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from openai import APIConnectionError, APIStatusError, RateLimitError
 
-from agents.state import OptimizationState
+from agents.state import LOCKED_STATUSES, OptimizationState
 from config import get_llm, settings
 from utils.session_store import session_store
 
 _MAX_BATCH_RETRIES = 5
 
+# The V2 prompt scopes evaluation by turns; records only carry message-based
+# evaluation_type/n_messages, so map the enum names and reuse the count as n_turns.
+_V2_SCOPE_MAP = {"entire": "entire", "first": "first_n_turns", "last": "last_n_turns"}
+
 logger = logging.getLogger(__name__)
 
 
 def _verdict_from_v2_result(result: dict) -> str:
-    """Map a V2 evaluator result to 'Yes' / 'No' / 'NA'. Explicit 'verdict' field wins."""
-    if "verdict" in result:
-        v = str(result["verdict"]).upper()
+    """Map a V2 evaluator result to 'Yes' / 'No' / 'NA'.
+
+    The current V2 prompt emits an 'adherence' field (YES/NO/NA); 'verdict' and
+    'isQualified' are legacy fallbacks kept for backward compatibility.
+    """
+    raw = result.get("adherence", result.get("verdict"))
+    if raw is not None:
+        v = str(raw).upper()
         if v == "YES":
             return "Yes"
         if v == "NO":
@@ -89,11 +98,11 @@ async def evaluator(state: OptimizationState) -> dict:
 
     records = dict(state["parameter_records"])
 
-    # Only submit non-converged rules to the LLM
+    # Only submit still-optimizing rules to the LLM (skip converged / stalled / label_limited)
     rules_to_evaluate = {
         rule_id: record
         for rule_id, record in records.items()
-        if record.get("status") != "converged"
+        if record.get("status") not in LOCKED_STATUSES
     }
 
     # Early return before any mutations if all rules are already converged
@@ -233,11 +242,11 @@ async def _evaluate_conversation(
     # Partition records by version; skip converged rules
     v1_records = {
         rid: rec for rid, rec in parameter_records.items()
-        if rec.get("version", "v1") == "v1" and rec.get("status") not in ("converged",)
+        if rec.get("version", "v1") == "v1" and rec.get("status") not in LOCKED_STATUSES
     }
     v2_records = {
         rid: rec for rid, rec in parameter_records.items()
-        if rec.get("version") == "v2" and rec.get("status") not in ("converged",)
+        if rec.get("version") == "v2" and rec.get("status") not in LOCKED_STATUSES
     }
 
     n_v1_batches = -(-len(v1_records) // batch_size) if v1_records else 0
@@ -388,11 +397,11 @@ async def _evaluate_conversation(
         for rid in batch_ids:
             rec = v2_records[rid]
             batch_payload.append({
+                "id": rid,
                 "description": rec["current_description"],
                 "speaker": rec["speaker"],
-                "id": rid,
-                "evaluation_type": rec["evaluation_type"],
-                "n_messages": rec["n_messages"],
+                "scope": _V2_SCOPE_MAP.get(rec["evaluation_type"], "entire"),
+                "n_turns": rec["n_messages"],
             })
 
         user_content = (
@@ -407,7 +416,7 @@ async def _evaluate_conversation(
                 async with semaphore:
                     response = await asyncio.wait_for(
                         llm.ainvoke([
-                            SystemMessage(content=system_prompt_v2),
+                            SystemMessage(content=system_prompt_v2.replace("{{language}}", language)),
                             HumanMessage(content=user_content),
                         ]),
                         timeout=settings.llm_call_timeout,

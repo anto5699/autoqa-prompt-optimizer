@@ -1,4 +1,19 @@
-from typing import Dict
+import math
+from typing import Dict, Optional
+
+
+def wilson_interval(p: float, n: int, z: float = 1.96) -> Optional[Dict[str, float]]:
+    """95% Wilson score interval for a proportion p over n trials. None if n == 0.
+
+    Used for minimum-N gating (5c): a tiny n yields a very wide interval, which is exactly
+    the "this accuracy is statistically fragile" signal we want to surface. Pure function.
+    """
+    if n <= 0:
+        return None
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    margin = (z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / denom
+    return {"low": round(max(0.0, centre - margin), 4), "high": round(min(1.0, centre + margin), 4)}
 
 
 def compute_metrics(
@@ -56,4 +71,6 @@ def compute_metrics(
         "na_wrong": na_wrong,
         "wrong_na_pred": wrong_na_pred,
         "not_applicable_count": na_correct + na_wrong,  # kept for backward compat with report
+        "n": total,                    # scored conversations (all with a GT label) — for CI / gating
+        "evaluable_n": tp + tn + fp + fn,  # Yes/No answer rows only — the fragile dimension
     }

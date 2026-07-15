@@ -7,7 +7,7 @@ from agents.nodes.benchmarking import benchmarking
 from agents.nodes.csv_ingestion import csv_ingestion
 from agents.nodes.evaluator import evaluator
 from agents.nodes.finalize import finalize
-from agents.nodes.gt_alignment_audit import gt_alignment_audit
+from agents.nodes.gt_alignment_audit import _no_progress, _should_audit, gt_alignment_audit
 from agents.nodes.mid_loop_clarification import mid_loop_clarification
 from agents.nodes.pre_flight_gt_audit import pre_flight_gt_audit
 from agents.nodes.prompt_optimizer import prompt_optimizer
@@ -24,20 +24,15 @@ def convergence_check(state: OptimizationState) -> str:
 
 
 def _needs_alignment_audit(state: OptimizationState) -> str:
+    # Route to the GT alignment audit when any below-target rule is making no progress — either
+    # tight-flat stagnation OR oscillation (see _no_progress) — and an audit is due. Shares the
+    # exact predicates the audit node uses so routing and selection never disagree.
     records = state["parameter_records"]
     below = state["parameters_below_target"]
     current_iteration = state["current_iteration"]
     for rule_id in below:
         record = records.get(rule_id, {})
-        history = record.get("iteration_history", [])
-        if len(history) < 3:
-            continue
-        recent = [h["accuracy"] for h in history[-3:]]
-        if (max(recent) - min(recent)) >= 0.03:
-            continue
-        # Stagnant — check if audit is due
-        last_audit = record.get("audit_iteration")
-        if last_audit is None or (current_iteration - last_audit) >= 3:
+        if _no_progress(record) and _should_audit(record, current_iteration):
             return "gt_alignment_audit"
     return "mid_loop_clarification"
 

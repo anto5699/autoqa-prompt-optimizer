@@ -88,37 +88,43 @@ def _collect_error_cases(
     by_type: dict[str, list[dict]] = {}
     for conv_id, gt_by_rule in ground_truth_map.items():
         gt = gt_by_rule.get(rule_id)
-        if gt == "NA" or gt is None:
+        if gt is None:
             continue
         pred = predictions.get(conv_id, "No")
-        if pred != gt:
-            conv = conversations_by_id.get(conv_id, {})
-            if version == "v1":
-                if pred == "NA" and gt != "NA":
-                    error_type = "missed_trigger"
-                elif pred == "Yes" and gt != "Yes":
-                    error_type = "false_positive"
-                elif pred == "No" and gt != "No":
-                    error_type = "false_negative"
-                else:
-                    continue
-            else:  # v2
-                if pred == "Yes" and gt != "Yes":
-                    error_type = "false_positive"
-                elif pred == "No" and gt != "No":
-                    error_type = "false_negative"
-                elif pred == "NA" and gt != "NA":
-                    error_type = "false_na_prediction"
-                else:
-                    continue
-            by_type.setdefault(error_type, []).append({
-                "conversation_id": conv_id,
-                "ground_truth": gt,
-                "prediction": pred,
-                "error_type": error_type,
-                "transcript": conv.get("transcript", []),
-                "rationale": rationales.get(conv_id, ""),
-            })
+        if pred == gt:
+            # Correct — includes GT=NA & pred=NA (trigger rightly stayed silent).
+            continue
+        conv = conversations_by_id.get(conv_id, {})
+        if gt == "NA":
+            # Trigger over-fired: fired (Yes/No) on an out-of-scope conversation.
+            # These lower 3-class accuracy (na_wrong) but were previously invisible to RCA.
+            error_type = "trigger_overfire"
+        elif version == "v1":
+            if pred == "NA":
+                error_type = "missed_trigger"
+            elif pred == "Yes":
+                error_type = "false_positive"
+            elif pred == "No":
+                error_type = "false_negative"
+            else:
+                continue
+        else:  # v2
+            if pred == "Yes":
+                error_type = "false_positive"
+            elif pred == "No":
+                error_type = "false_negative"
+            elif pred == "NA":
+                error_type = "false_na_prediction"
+            else:
+                continue
+        by_type.setdefault(error_type, []).append({
+            "conversation_id": conv_id,
+            "ground_truth": gt,
+            "prediction": pred,
+            "error_type": error_type,
+            "transcript": conv.get("transcript", []),
+            "rationale": rationales.get(conv_id, ""),
+        })
     # Cap each error type separately so all types are represented in the prompt
     errors = []
     for cases in by_type.values():
@@ -181,6 +187,7 @@ async def _run_rca(
             "false_positive": "Predicted YES (adhered) but ground truth is NO — agent did not satisfy EXPECTED BEHAVIOR",
             "false_negative": "Predicted NO (not adhered) but ground truth is YES — agent actually satisfied EXPECTED BEHAVIOR",
             "false_na_prediction": "Predicted NA but ground truth is YES or NO — CONDITION or EXCEPTION mis-triggered",
+            "trigger_overfire": "Predicted YES or NO but ground truth is NA — CONDITION fired on an out-of-scope conversation (should have stayed NA)",
         }
         error_labels_str = "\n".join(f"{k}: {v}" for k, v in error_labels.items())
         ask = (
@@ -204,11 +211,14 @@ async def _run_rca(
             error_labels_str = (
                 "False positive = predicted Yes (adhered) but GT=No (not adhered).\n"
                 "False negative = predicted No (not adhered) but GT=Yes (adhered).\n"
-                "Missed trigger = predicted NA (scenario absent) but GT=Yes or GT=No (scenario was present)."
+                "Missed trigger = predicted NA (scenario absent) but GT=Yes or GT=No (scenario was present).\n"
+                "Trigger over-fire = predicted Yes or No (scenario treated as present) but GT=NA (scenario was absent / out of scope)."
             )
             ask = (
-                "Identify whether the failure is in the trigger condition (failing to detect the scenario), "
+                "Identify whether the failure is in the trigger condition (failing to detect the scenario, "
+                "OR firing when the scenario is absent — over-firing), "
                 "the answer condition (misclassifying adherence when scenario is present), or both. "
+                "For trigger over-fire, the trigger description is too broad and must be tightened. "
                 "Specify which description needs changing."
             )
             trigger_desc = record.get("trigger_description") or "(none)"
@@ -221,11 +231,13 @@ async def _run_rca(
         else:
             error_labels_str = (
                 "False positive = LLM said adhered but GT=No.\n"
-                "False negative = LLM said not adhered but GT=Yes."
+                "False negative = LLM said not adhered but GT=Yes.\n"
+                "Trigger over-fire = judged the metric applicable (Yes/No) but GT=NA (metric was not applicable to this conversation)."
             )
             ask = (
                 "Identify what in the description causes misclassification: "
-                "vague criteria, missing specificity, implicit knowledge required, or scope mismatch?"
+                "vague criteria, missing specificity, implicit knowledge required, or scope mismatch? "
+                "For over-fire cases, the description is being applied where the metric does not apply."
             )
             description_section = f"Current description:\n{record['current_description']}\n\n"
 

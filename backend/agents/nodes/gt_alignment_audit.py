@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agents.nodes.benchmarking import _iters_without_improvement
 from agents.state import OptimizationState
-from config import get_llm
+from config import get_llm, settings
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,15 @@ logger = logging.getLogger(__name__)
 _MAX_CORRECT_CASES = 10
 _MAX_ERROR_CASES = 10
 _MAX_TRANSCRIPT_MESSAGES = 12
-_MIN_ITERS_BETWEEN_AUDITS = 3
+
+
+def _extract_gap_type(findings: str) -> str:
+    """Read the 'Gap type:' line the audit prompt is required to emit first."""
+    for line in (findings or "").split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("Gap type:"):
+            return stripped[len("Gap type:"):].strip()
+    return "UNKNOWN"
 
 _SYSTEM = (
     "You are a QA evaluation expert. Analyse whether a rule description is fundamentally "
@@ -38,12 +47,32 @@ _SYSTEM = (
 )
 
 
-def _is_stagnant(record: dict, min_entries: int = 3) -> bool:
+def _is_stagnant(record: dict, min_entries: int | None = None) -> bool:
+    window = min_entries if min_entries is not None else settings.stagnation_window
     history = record.get("iteration_history", [])
-    if len(history) < min_entries:
+    if len(history) < window:
         return False
-    recent = [h["accuracy"] for h in history[-min_entries:]]
-    return (max(recent) - min(recent)) < 0.03
+    recent = [h["accuracy"] for h in history[-window:]]
+    return (max(recent) - min(recent)) < settings.stagnation_spread
+
+
+def _no_progress(record: dict) -> bool:
+    """A rule that is not making progress and should be audited.
+
+    Two shapes count: (1) tight-flat stagnation (`_is_stagnant`), and (2) — when
+    `audit_on_no_improvement` is set — oscillation, where the raw accuracy is not tight-flat but
+    `best` has not been beaten for `stagnation_window` iterations. Without (2), an oscillating-down
+    rule never gets audited and so can never reach the stalled / label_limited halts (both gated on
+    a prior audit). Requires at least `stagnation_window` history entries for either shape.
+    """
+    if _is_stagnant(record):
+        return True
+    if not settings.audit_on_no_improvement:
+        return False
+    history = record.get("iteration_history", [])
+    if len(history) < settings.stagnation_window:
+        return False
+    return _iters_without_improvement(history, settings.min_improvement_delta) >= settings.stagnation_window
 
 
 async def gt_alignment_audit(state: OptimizationState) -> dict:
@@ -56,7 +85,7 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
 
     stagnant_rules = [
         rule_id for rule_id in below_target
-        if _is_stagnant(records[rule_id])
+        if _no_progress(records[rule_id])
         and _should_audit(records[rule_id], iteration)
     ]
 
@@ -85,6 +114,8 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
     total = len(stagnant_rules)
     session_store.update(session_id, {"node_progress": {"node": "analyzing_failures", "step": 0, "total": total}})
 
+    halted: list[str] = []  # Change 2: rules the audit found label-limited
+
     for idx, rule_id in enumerate(stagnant_rules):
         record = records[rule_id]
         session_store.append_log(session_id, f"  GT audit: {rule_id}…")
@@ -94,22 +125,43 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
         error_cases = _collect_error_cases(rule_id, predictions, ground_truth_map, conversations_by_id)
 
         findings = await _run_audit(rule_id, record, correct_cases, error_cases, llm)
-        records[rule_id] = {**record, "alignment_audit": findings, "audit_iteration": iteration}
+        updated = {**record, "alignment_audit": findings, "audit_iteration": iteration}
 
-        logger.info("session=%s rule_id=%s GT alignment audit complete", session_id, rule_id)
+        # Change 2 — make LABELLING_INCONSISTENCY actionable: halt the rule instead of
+        # letting the loop keep rewriting a description against inconsistent labels.
+        gap_type = _extract_gap_type(findings)
+        if settings.enable_label_limited_halt and gap_type == "LABELLING_INCONSISTENCY":
+            updated["status"] = "label_limited"
+            updated["stop_reason"] = "label_inconsistency"
+            halted.append(rule_id)
+            session_store.append_log(
+                session_id,
+                f"  ⏹ {rule_id}: GT alignment audit found LABELLING_INCONSISTENCY — halting; "
+                f"labels contradict the definition, relabelling is required (see recommendations)",
+            )
+            logger.info("session=%s rule_id=%s halted (label_limited)", session_id, rule_id)
+
+        records[rule_id] = updated
+        logger.info("session=%s rule_id=%s GT alignment audit complete (%s)", session_id, rule_id, gap_type)
         session_store.set_node_progress(session_id, "analyzing_failures", idx + 1, total)
 
-    return {
+    result: dict = {
         "parameter_records": records,
         "progress_log": [f"GT alignment audit complete for {len(stagnant_rules)} stagnant rule(s)"],
     }
+    if halted:
+        # Drop halted rules from the loop-driving list so convergence_check can finalize; keep
+        # them tracked under meeting_target (the "not-optimizing" bucket).
+        result["parameters_below_target"] = [r for r in below_target if r not in halted]
+        result["parameters_meeting_target"] = [*state.get("parameters_meeting_target", []), *halted]
+    return result
 
 
 def _should_audit(record: dict, current_iteration: int) -> bool:
     last_audit = record.get("audit_iteration")
     if last_audit is None:
         return True
-    return (current_iteration - last_audit) >= _MIN_ITERS_BETWEEN_AUDITS
+    return (current_iteration - last_audit) >= settings.min_iters_between_audits
 
 
 def _collect_correct_cases(

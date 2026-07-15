@@ -1,6 +1,10 @@
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
+# Statuses that lock a rule out of further optimization (no re-eval, no re-benchmark).
+# "converged" = hit target; "stalled" = no progress after audit; "label_limited" = noisy labels.
+LOCKED_STATUSES = ("converged", "stalled", "label_limited")
+
 
 class RuleRecord(TypedDict):
     rule_id: str
@@ -19,6 +23,7 @@ class RuleRecord(TypedDict):
 
     current_predictions: Dict[str, str]
     current_rationales: Dict[str, str]
+    current_confidences: Dict[str, str]  # per-conversation eval confidence (5a; empty unless enabled)
     current_accuracy: float
     current_precision: float
     current_recall: float
@@ -32,7 +37,19 @@ class RuleRecord(TypedDict):
     alignment_audit: Optional[str]
     audit_iteration: Optional[int]
     optimization_notes: Optional[str]
-    status: Literal["pending", "optimizing", "converged", "max_iterations_reached"]
+    status: Literal[
+        "pending", "optimizing", "converged", "max_iterations_reached",
+        "stalled",         # Change 1: no progress after a GT alignment audit — stopped early
+        "label_limited",   # Change 2: GT alignment audit found LABELLING_INCONSISTENCY — halted
+    ]
+    # --- Measurable telemetry (all optional; additive, read via .get) ---
+    stop_reason: Optional[str]                    # converged | max_iterations_reached | stalled_no_progress | label_inconsistency
+    iterations_without_improvement: Optional[int]  # Change 1
+    na_divergence: Optional[Dict[str, Any]]        # 5d: {pred_na_rate, gt_na_rate, direction}
+    label_consistency_score: Optional[float]       # 5b
+    low_confidence_metric: Optional[bool]          # 5c
+    evaluable_n: Optional[int]                     # 5c
+    accuracy_ci: Optional[Dict[str, float]]        # 5c: {low, high}
 
     # Regression tracking — set during first benchmarking pass
     initial_accuracy: Optional[float]
@@ -91,8 +108,9 @@ class OptimizationState(TypedDict):
     parameter_records: Dict[str, ParameterOptimizationRecord]
 
     optimization_complete: bool
-    parameters_meeting_target: List[str]
-    parameters_below_target: List[str]
+    parameters_meeting_target: List[str]  # NOTE: holds all non-"optimizing" rules
+    #   (converged + stalled + label_limited) so convergence_check exits when below_target empties.
+    parameters_below_target: List[str]    # only rules with status == "optimizing"
 
     progress_log: Annotated[List[str], operator.add]
     current_phase: Literal[

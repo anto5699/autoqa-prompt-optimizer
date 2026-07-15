@@ -8,13 +8,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from agents.state import ClarifyingQuestion, OptimizationState
-from config import get_llm
+from config import get_llm, settings
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
 
 _MAX_QUESTIONS = 5
-_STAGNANT_MIN_ENTRIES = 3
 
 _SYSTEM = (
     "You are an expert QA analyst. Given a root cause analysis of LLM evaluation errors for a QA rule, "
@@ -44,11 +43,12 @@ _SYSTEM = (
 
 
 def _is_stagnant(record: dict) -> bool:
+    window = settings.stagnation_window
     history = record.get("iteration_history", [])
-    if len(history) < _STAGNANT_MIN_ENTRIES:
+    if len(history) < window:
         return False
-    recent = [h["accuracy"] for h in history[-_STAGNANT_MIN_ENTRIES:]]
-    return (max(recent) - min(recent)) < 0.03
+    recent = [h["accuracy"] for h in history[-window:]]
+    return (max(recent) - min(recent)) < settings.stagnation_spread
 
 
 def _accuracy_trajectory(record: dict) -> str:

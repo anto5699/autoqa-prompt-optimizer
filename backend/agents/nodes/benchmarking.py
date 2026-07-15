@@ -1,10 +1,25 @@
 import logging
 
-from agents.state import OptimizationState
+from agents.state import LOCKED_STATUSES, OptimizationState
+from config import settings
 from utils.accuracy_metrics import compute_metrics
 from utils.session_store import session_store
 
 logger = logging.getLogger(__name__)
+
+
+def _iters_without_improvement(history: list, min_delta: float) -> int:
+    """Trailing iterations since accuracy last improved by >= min_delta. Pure function."""
+    accs = [h["accuracy"] for h in history]
+    if len(accs) <= 1:
+        return 0
+    best_so_far = accs[0]
+    last_improve = 0
+    for i in range(1, len(accs)):
+        if accs[i] >= best_so_far + min_delta:
+            best_so_far = accs[i]
+            last_improve = i
+    return (len(accs) - 1) - last_improve
 
 
 
@@ -25,8 +40,8 @@ async def benchmarking(state: OptimizationState) -> dict:
     log_lines: list[str] = []
 
     for rule_id, record in records.items():
-        # Converged rules are locked — skip silently; accuracy panel shows their status
-        if record.get("status") == "converged":
+        # Locked rules (converged / stalled / label_limited) are skipped — status panel shows why
+        if record.get("status") in LOCKED_STATUSES:
             meeting_target.append(rule_id)
             continue
 
@@ -34,21 +49,35 @@ async def benchmarking(state: OptimizationState) -> dict:
         new_accuracy = metrics["accuracy"]
         is_dynamic = record.get("rule_type") == "dynamic" and record.get("version", "v1") == "v1"
 
-        # NA-collapse detection: warn when predictions have far more NAs than ground truth
-        _pred_na = sum(1 for p in record["current_predictions"].values() if p == "NA")
-        _pred_total = len(record["current_predictions"])
-        _pred_na_rate = _pred_na / _pred_total if _pred_total else 0.0
-        _gt_na = sum(1 for gt_by_rule in ground_truth_map.values() if gt_by_rule.get(rule_id) == "NA")
-        _gt_na_rate = _gt_na / len(ground_truth_map) if ground_truth_map else 0.0
-        if _pred_na_rate > _gt_na_rate + 0.20:
+        # NA-divergence detection (5d): predicted-NA rate vs ground-truth-NA rate. Symmetric and
+        # neutral — a large gap in EITHER direction means predictions and labels disagree on scope;
+        # the cause may be the trigger wording OR the NA labels. Warn-only; changes no control flow.
+        # Both rates use the same denominator: conversations that HAVE a label for this rule.
+        _labelled = [gt.get(rule_id) for gt in ground_truth_map.values() if gt.get(rule_id) is not None]
+        _n_labelled = len(_labelled)
+        _pred_na = sum(1 for cid in ground_truth_map
+                       if ground_truth_map[cid].get(rule_id) is not None
+                       and record["current_predictions"].get(cid) == "NA")
+        _pred_na_rate = _pred_na / _n_labelled if _n_labelled else 0.0
+        _gt_na_rate = sum(1 for v in _labelled if v == "NA") / _n_labelled if _n_labelled else 0.0
+        _na_gap = _pred_na_rate - _gt_na_rate
+        na_divergence = {
+            "pred_na_rate": round(_pred_na_rate, 4),
+            "gt_na_rate": round(_gt_na_rate, 4),
+            "direction": ("pred_over_na" if _na_gap > 0.20
+                          else "gt_over_na" if _na_gap < -0.20 else "aligned"),
+        }
+        if abs(_na_gap) > 0.20:
+            _dir = ("predictions mark far MORE NA than the labels — audit trigger scope AND the NA labels"
+                    if _na_gap > 0 else
+                    "the labels mark far MORE NA than predictions — the GT may be over-using NA")
             session_store.append_log(
                 state["session_id"],
-                f"  ⚠ {rule_id}: description may be over-qualifying NA "
-                f"({_pred_na_rate:.0%} predicted NA vs {_gt_na_rate:.0%} in ground truth) — check trigger scope",
+                f"  ⚠ {rule_id}: NA divergence ({_pred_na_rate:.0%} predicted vs {_gt_na_rate:.0%} labelled) — {_dir}",
             )
             logger.warning(
-                "session=%s rule_id=%s NA collapse: pred_na=%.2f gt_na=%.2f",
-                state["session_id"], rule_id, _pred_na_rate, _gt_na_rate,
+                "session=%s rule_id=%s NA divergence: pred_na=%.2f gt_na=%.2f dir=%s",
+                state["session_id"], rule_id, _pred_na_rate, _gt_na_rate, na_divergence["direction"],
             )
 
         # First pass: seed regression tracking
@@ -127,14 +156,38 @@ async def benchmarking(state: OptimizationState) -> dict:
             "best_predictions": best_predictions,
             "best_rationales": best_rationales,
             "iteration_history": [*record["iteration_history"], history_entry],
+            "na_divergence": na_divergence,
         }
 
         if new_accuracy >= accuracy_target:
             updated_record["status"] = "converged"
+            updated_record["stop_reason"] = "converged"
             meeting_target.append(rule_id)
         else:
-            updated_record["status"] = "optimizing"
-            below_target.append(rule_id)
+            # Change 1 — no-progress early-stop. Only after a GT alignment audit has run
+            # (audit_iteration set) and the candidate accuracy has been flat for >= stall_patience
+            # iterations. Never fires on an improving rule; only stops work, never alters accuracy.
+            iters_flat = _iters_without_improvement(
+                updated_record["iteration_history"], settings.min_improvement_delta
+            )
+            updated_record["iterations_without_improvement"] = iters_flat
+            audited = record.get("audit_iteration") is not None
+            if audited and iters_flat >= settings.stall_patience:
+                updated_record["status"] = "stalled"
+                updated_record["stop_reason"] = "stalled_no_progress"
+                meeting_target.append(rule_id)  # not below_target → convergence_check can finalize
+                session_store.append_log(
+                    state["session_id"],
+                    f"  ⏹ {rule_id}: no progress for {iters_flat} iteration(s) after GT audit "
+                    f"(best {best_accuracy:.0%}) — stopping this metric",
+                )
+                logger.info(
+                    "session=%s rule_id=%s stalled after %d flat iterations",
+                    state["session_id"], rule_id, iters_flat,
+                )
+            else:
+                updated_record["status"] = "optimizing"
+                below_target.append(rule_id)
 
         records[rule_id] = updated_record
         log_lines.append(

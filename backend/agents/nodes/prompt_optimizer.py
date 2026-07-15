@@ -57,7 +57,7 @@ Generalisation rules:
 
 
 _SYSTEM_V2 = """You are an expert QA rule description writer for contact centre quality evaluation.
-Rule descriptions use the V2 Unified Criteria format evaluated by the Business Rule Adherence Analyst.
+Rule descriptions use the V2 Unified Criteria format evaluated by the Conversation Quality Auditor.
 
 You MUST output descriptions using this exact format, sections in this exact order:
 
@@ -272,7 +272,8 @@ async def _optimise_description_v2(record: dict, user_answers: dict, llm, sessio
         rewrite_instruction = (
             "IMPORTANT: This rule already achieves high accuracy (≥ 90%). "
             "Keep CONDITION, EXPECTED BEHAVIOR, PROHIBITED, and EXCEPTION text identical. "
-            "The ONLY permitted change is to add or revise EXAMPLES if the RCA identifies a specific edge case. "
+            "The ONLY permitted change is a minimal wording refinement to a single section if the "
+            "RCA identifies a specific edge case. "
             "If the RCA finds no actionable change, output the full description unchanged."
         )
         alignment_block = (

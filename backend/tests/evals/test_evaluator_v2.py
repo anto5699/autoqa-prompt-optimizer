@@ -2,9 +2,10 @@
 
 Scenarios
 ---------
-E-V2-1  Correct V2 verdict from isQualified: true
-E-V2-2  V2 system prompt is used; V1 system prompt is not
+E-V2-1  Correct V2 verdict from a clear greeting conversation
+E-V2-2  V2 system prompt is used (V1 is not); V2 payload uses scope/n_turns
 E-V2-3  V2 justification field mapped to rationale (mocked LLM)
+E-V2-4  V2 adherence='NO' maps to prediction 'No' (mocked LLM)
 """
 import asyncio
 from unittest.mock import AsyncMock, patch
@@ -116,14 +117,16 @@ async def test_e_v2_2_system_prompt_routing():
     original_ainvoke = ChatOpenAI.ainvoke
 
     async def capturing_ainvoke(self, messages, **kwargs):
-        call_info: dict = {"system_prompt": None}
+        call_info: dict = {"system_prompt": None, "user_content": None}
         for msg in messages:
             if hasattr(msg, "content") and isinstance(msg.content, str):
                 if (
                     msg.content.startswith("You are an AutoQA evaluation engine")
-                    or msg.content.startswith("You are a Business Rule Adherence Analyst")
+                    or msg.content.startswith("You are a Conversation Quality Auditor")
                 ):
                     call_info["system_prompt"] = msg.content[:80]
+                elif msg.content.startswith("Transcripts:"):
+                    call_info["user_content"] = msg.content
         calls.append(call_info)
         return await original_ainvoke(self, messages, **kwargs)
 
@@ -137,17 +140,31 @@ async def test_e_v2_2_system_prompt_routing():
     system_prompts = [c["system_prompt"] for c in calls]
 
     assert any(
-        p and p.startswith("You are a Business Rule Adherence Analyst")
+        p and p.startswith("You are a Conversation Quality Auditor")
         for p in system_prompts
     ), (
         f"[E-V2-2] V2 system prompt was not used in any call. Captured: {system_prompts}"
     )
 
     assert any(
-        p and not p.startswith("You are a Business Rule Adherence Analyst")
+        p and not p.startswith("You are a Conversation Quality Auditor")
         for p in system_prompts
     ), (
         f"[E-V2-2] V1 system prompt was not used in any call. Captured: {system_prompts}"
+    )
+
+    # The V2 rule payload must use the turn-based scope contract, not the message-based fields.
+    v2_payloads = [
+        c["user_content"] for c in calls
+        if c["system_prompt"] and c["system_prompt"].startswith("You are a Conversation Quality Auditor")
+    ]
+    assert v2_payloads and v2_payloads[0], "[E-V2-2] Could not capture the V2 call user payload"
+    v2_payload = v2_payloads[0]
+    assert '"scope"' in v2_payload and '"n_turns"' in v2_payload, (
+        "[E-V2-2] V2 rule payload should serialize scope/n_turns"
+    )
+    assert '"evaluation_type"' not in v2_payload and '"n_messages"' not in v2_payload, (
+        "[E-V2-2] V2 rule payload should not use the legacy evaluation_type/n_messages fields"
     )
 
 
@@ -171,11 +188,11 @@ async def test_e_v2_3_justification_mapped_to_rationale():
     mock_response = [
         {
             "_id": "AgentGreetingV2",
-            "isQualified": True,
-            "messageId": ["0"],
-            "speaker": "Agent",
-            "timestamp": [0],
+            "adherence": "YES",
+            "speaker": "agent",
+            "failureReason": "",
             "justification": long_justification,
+            "messageIds": ["0"],
         }
     ]
     mock_content = _json.dumps(mock_response)
@@ -188,9 +205,54 @@ async def test_e_v2_3_justification_mapped_to_rationale():
         result = await evaluator(state)
 
     records = result["parameter_records"]
+    prediction = records["AgentGreetingV2"]["current_predictions"].get("c1")
     rationale = records["AgentGreetingV2"]["current_rationales"].get("c1", "")
 
+    assert prediction == "Yes", (
+        f"[E-V2-3] Expected prediction='Yes' from adherence='YES', got '{prediction}'"
+    )
     assert len(rationale) > 0, "[E-V2-3] Rationale should be non-empty after mapping justification"
     assert len(rationale) <= 500, (
         f"[E-V2-3] Rationale should be truncated to 500 chars, got {len(rationale)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E-V2-4: V2 adherence='NO' maps to prediction 'No' (mocked LLM response)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_e_v2_4_adherence_no_maps_to_prediction():
+    """A V2 response with adherence='NO' is mapped to prediction 'No' (mocked)."""
+    import json as _json
+
+    scenario = {
+        "id": "e-v2-4",
+        "rule": _v2_greeting_rule(),
+        "conversations": [_greeting_conversation()],
+    }
+    state = build_state(scenario)
+
+    mock_response = [
+        {
+            "_id": "AgentGreetingV2",
+            "adherence": "NO",
+            "speaker": "agent",
+            "failureReason": "Agent did not greet the customer",
+            "justification": "The agent never offered any greeting at the start of the conversation.",
+            "messageIds": [],
+        }
+    ]
+    mock_ai_message = AIMessage(content=_json.dumps(mock_response))
+
+    from langchain_openai import ChatOpenAI
+
+    with patch.object(ChatOpenAI, "ainvoke", new_callable=AsyncMock, return_value=mock_ai_message):
+        result = await evaluator(state)
+
+    records = result["parameter_records"]
+    prediction = records["AgentGreetingV2"]["current_predictions"].get("c1")
+
+    assert prediction == "No", (
+        f"[E-V2-4] Expected prediction='No' from adherence='NO', got '{prediction}'"
     )

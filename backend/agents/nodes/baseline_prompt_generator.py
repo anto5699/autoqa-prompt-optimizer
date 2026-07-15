@@ -184,7 +184,7 @@ def _is_structured(description: str) -> bool:
 
 
 _SYSTEM_V2 = """You are an expert QA rule description writer for contact centre quality evaluation.
-Rule descriptions use the V2 Unified Criteria format evaluated by the Business Rule Adherence Analyst.
+Rule descriptions use the V2 Unified Criteria format evaluated by the Conversation Quality Auditor.
 
 You MUST output descriptions using this exact format, sections in this exact order:
 

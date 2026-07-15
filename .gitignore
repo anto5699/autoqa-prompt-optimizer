@@ -32,6 +32,9 @@ Aptia*.csv
 Axis*.csv
 Axis*.tsv
 
+# Aptia optimization run — findings, harness, transcript-derived RCA (private)
+.aptia-run/
+
 # Temporary data transfer artifacts
 *.gz.b64
 csvpart_*.txt

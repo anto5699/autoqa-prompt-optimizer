@@ -74,8 +74,20 @@ def test_rca_prompt_contains_evaluator_rationale(mock_get_llm):
     assert "Treat it as evidence" in human_msg.content
 
 
-def test_collect_error_cases_excludes_na_ground_truths():
-    """Conversations with NA ground truth must produce no error cases."""
+def test_collect_error_cases_correct_na_produces_no_error():
+    """GT=NA predicted correctly as NA must produce no error case (trigger rightly stayed silent)."""
+    errors = _collect_error_cases(
+        rule_id="r1",
+        predictions={"c1": "NA", "c2": "NA"},
+        rationales={},
+        ground_truth_map={"c1": {"r1": "NA"}, "c2": {"r1": "NA"}},
+        conversations_by_id={},
+    )
+    assert errors == []
+
+
+def test_collect_error_cases_flags_trigger_overfire_on_na_ground_truth():
+    """GT=NA but predicted Yes/No is trigger over-fire — must surface so the optimizer can tighten the trigger."""
     errors = _collect_error_cases(
         rule_id="r1",
         predictions={"c1": "Yes", "c2": "No"},
@@ -83,4 +95,5 @@ def test_collect_error_cases_excludes_na_ground_truths():
         ground_truth_map={"c1": {"r1": "NA"}, "c2": {"r1": "NA"}},
         conversations_by_id={},
     )
-    assert errors == []
+    assert len(errors) == 2
+    assert all(e["error_type"] == "trigger_overfire" for e in errors)

@@ -46,6 +46,7 @@ class GtCorrection(BaseModel):
 
 class ParameterReport(BaseModel):
     status: str
+    rule_type: Optional[str] = None
     version: Optional[str] = None
     original_description: Optional[str] = None
     initial_prompt: Optional[str] = None
@@ -57,6 +58,7 @@ class ParameterReport(BaseModel):
     confusion_matrix: ConfusionMatrix
     not_applicable_count: int
     final_prompt: str
+    final_trigger_prompt: Optional[str] = None
     optimization_notes: Optional[str] = None
     iteration_history: List[Dict[str, Any]]
     rca_findings: Optional[str] = None

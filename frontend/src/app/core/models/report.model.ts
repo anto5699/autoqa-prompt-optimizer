@@ -33,6 +33,7 @@ export interface GtCorrection {
 
 export interface ParameterReport {
   status: string;
+  rule_type?: string;
   original_description?: string;
   final_accuracy: number;
   final_precision: number;
@@ -43,6 +44,7 @@ export interface ParameterReport {
   initial_prompt: string;
   initial_accuracy: number | null;
   final_prompt: string;
+  final_trigger_prompt?: string;
   optimization_notes?: string;
   iteration_history: IterationEntry[];
   rca_findings?: string;

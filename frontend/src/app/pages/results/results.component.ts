@@ -133,9 +133,17 @@ type FilterKey = 'all' | 'converged' | 'not-met';
                 <span class="prompt-acc-badge" [class.good]="entry.val.final_accuracy >= report!.summary.accuracy_target" [class.bad]="entry.val.final_accuracy < report!.summary.accuracy_target">{{ (entry.val.final_accuracy * 100).toFixed(1) }}% accuracy</span>
                 <button class="copy-btn" (click)="copy(entry.key, entry.val.final_prompt)">Copy</button>
               </div>
-              <pre *ngIf="entry.val.version === 'v2'; else regularPrompt" class="prompt-box final v2-description">{{ entry.val.final_prompt }}</pre>
-              <ng-template #regularPrompt>
+              <ng-container *ngIf="entry.val.rule_type === 'dynamic' && entry.val.final_trigger_prompt; else singlePrompt">
+                <div class="prompt-col-label" style="margin-top:8px">Trigger — detects scope</div>
+                <pre class="prompt-box final">{{ entry.val.final_trigger_prompt }}</pre>
+                <div class="prompt-col-label" style="margin-top:8px">Answer — evaluates adherence</div>
                 <pre class="prompt-box final">{{ entry.val.final_prompt }}</pre>
+              </ng-container>
+              <ng-template #singlePrompt>
+                <pre *ngIf="entry.val.version === 'v2'; else regularPrompt" class="prompt-box final v2-description">{{ entry.val.final_prompt }}</pre>
+                <ng-template #regularPrompt>
+                  <pre class="prompt-box final">{{ entry.val.final_prompt }}</pre>
+                </ng-template>
               </ng-template>
             </div>
           </div>
@@ -505,12 +513,17 @@ export class ResultsComponent implements OnInit {
 
   exportPromptsCsv() {
     if (!this.report) return;
-    const rows = [['parameter_name', 'version', 'rule_type', 'optimised_prompt']];
+    const rows: string[][] = [['parameter_name', 'version', 'rule_type', 'optimised_prompt']];
     for (const [ruleId, paramReport] of Object.entries(this.report.parameters)) {
       const version = paramReport.version || 'v1';
-      const ruleType = version === 'v2' ? 'unified' : (ruleId.endsWith('__trigger') ? 'trigger' : 'answer');
-      const prompt = paramReport.final_prompt || '';
-      rows.push([ruleId, version, ruleType, prompt]);
+      const isDynamic = version !== 'v2' && paramReport.rule_type === 'dynamic';
+      if (isDynamic && paramReport.final_trigger_prompt) {
+        rows.push([ruleId, version, 'trigger', paramReport.final_trigger_prompt]);
+        rows.push([ruleId, version, 'answer', paramReport.final_prompt || '']);
+      } else {
+        const ruleType = version === 'v2' ? 'unified' : 'answer';
+        rows.push([ruleId, version, ruleType, paramReport.final_prompt || '']);
+      }
     }
     const csvRows = [rows[0].join(',')];
     for (let i = 1; i < rows.length; i++) {

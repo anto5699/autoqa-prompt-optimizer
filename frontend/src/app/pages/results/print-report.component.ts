@@ -227,7 +227,15 @@ import { FinalReport, ParameterReport } from '../../core/models/report.model';
                 {{ copiedPdf[e.key] ? '✓ Copied' : 'Copy' }}
               </button>
             </div>
-            <pre class="prompt-box final">{{ e.val.final_prompt }}</pre>
+            <ng-container *ngIf="e.val.rule_type === 'dynamic' && e.val.final_trigger_prompt; else printSinglePrompt">
+              <div class="prompt-col-header" style="margin-top:8px">Trigger — detects scope</div>
+              <pre class="prompt-box final">{{ e.val.final_trigger_prompt }}</pre>
+              <div class="prompt-col-header" style="margin-top:8px">Answer — evaluates adherence</div>
+              <pre class="prompt-box final">{{ e.val.final_prompt }}</pre>
+            </ng-container>
+            <ng-template #printSinglePrompt>
+              <pre class="prompt-box final">{{ e.val.final_prompt }}</pre>
+            </ng-template>
           </div>
         </div>
 

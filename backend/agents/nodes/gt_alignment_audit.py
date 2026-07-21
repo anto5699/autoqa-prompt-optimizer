@@ -122,8 +122,9 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
 
         predictions = record["current_predictions"]
         is_dynamic = record.get("rule_type") == "dynamic"
+        keep_na_cases = is_dynamic or record.get("version") == "v2"
         correct_cases = _collect_correct_cases(rule_id, predictions, ground_truth_map, conversations_by_id)
-        error_cases = _collect_error_cases(rule_id, predictions, ground_truth_map, conversations_by_id, is_dynamic=is_dynamic)
+        error_cases = _collect_error_cases(rule_id, predictions, ground_truth_map, conversations_by_id, keep_na_cases=keep_na_cases)
 
         findings = await _run_audit(rule_id, record, correct_cases, error_cases, llm)
         updated = {**record, "alignment_audit": findings, "audit_iteration": iteration}
@@ -193,22 +194,24 @@ def _collect_error_cases(
     predictions: dict,
     ground_truth_map: dict,
     conversations_by_id: dict,
-    is_dynamic: bool = False,
+    keep_na_cases: bool = False,
 ) -> list[dict]:
     """Collect misclassified cases as evidence for the alignment audit.
 
-    For dynamic (By Question) rules, GT=NA rows are NOT skipped: a prediction that
-    disagrees with GT=NA is a trigger over-fire, and GT=Yes/No with a NA prediction is a
-    missed trigger — both are genuine trigger-side failures the audit must be able to see,
-    not just answer-side (Yes vs No) misclassification. Static rules keep the original
-    behaviour (NA is genuinely inapplicable, there is no trigger condition to recover).
+    For rules that can legitimately produce NA — V1 dynamic (By Question) rules, and V2
+    unified rules whose NA comes from an unmet CONDITION or a satisfied EXCEPTION — GT=NA
+    rows are NOT skipped: a prediction that disagrees with GT=NA is a gate over-fire, and
+    GT=Yes/No with a NA prediction is a missed/over-strict gate — both are genuine gate-side
+    failures the audit must be able to see, not just answer-side (Yes vs No) misclassification.
+    Static (non-conditional) rules keep the original behaviour (NA is genuinely inapplicable,
+    there is no gate condition to recover).
     """
     cases = []
     for conv_id, gt_by_rule in ground_truth_map.items():
         gt = gt_by_rule.get(rule_id)
         if gt is None:
             continue
-        if gt == "NA" and not is_dynamic:
+        if gt == "NA" and not keep_na_cases:
             continue
         pred = predictions.get(conv_id, "No")
         if pred == gt:
@@ -256,6 +259,7 @@ async def _run_audit(
     history = record.get("iteration_history", [])
     trajectory = " → ".join(f"{h['accuracy']:.0%}" for h in history) if history else "no history"
     is_dynamic = record.get("rule_type") == "dynamic"
+    is_v2 = record.get("version") == "v2"
 
     if is_dynamic:
         trigger_desc = record.get("trigger_description") or "(none)"
@@ -272,6 +276,19 @@ async def _run_audit(
             "cases, state clearly that the TRIGGER description — not the answer description — needs to "
             "change.\n\n"
         )
+    elif is_v2:
+        description_section = (
+            f"V2 unified description (CONDITION / EXPECTED BEHAVIOR / PROHIBITED (optional) / "
+            f"EXCEPTION sections embedded below — speaker: {record['speaker']}):\n"
+            f"{record['current_description']}\n\n"
+        )
+        attribution_ask = (
+            "Identify whether the failure is in the CONDITION/EXCEPTION gate (the rule fired when the "
+            "CONDITION was not met, or failed to resolve NA when an EXCEPTION applied — these show up "
+            "as GT=NA disagreements) or in EXPECTED BEHAVIOR/PROHIBITED (misjudging agent adherence once "
+            "the gate is passed). For gate-side failures, state clearly that the CONDITION or EXCEPTION "
+            "section — not EXPECTED BEHAVIOR — needs to change.\n\n"
+        )
     else:
         description_section = f"Current description:\n{record['current_description']}\n\n"
         attribution_ask = ""
@@ -284,7 +301,7 @@ async def _run_audit(
 
     error_text = "\n\n".join(
         f"[E{i + 1}] GT={e['ground_truth']} | Predicted={e['prediction']}"
-        + (f" | Type={e['error_type'].replace('_', ' ')}" if is_dynamic and e.get("error_type") else "")
+        + (f" | Type={e['error_type'].replace('_', ' ')}" if (is_dynamic or is_v2) and e.get("error_type") else "")
         + f"\nTranscript:\n{_format_transcript(e['transcript'])}"
         for i, e in enumerate(error_cases)
     ) or "No error cases available."
@@ -317,7 +334,9 @@ async def _run_audit(
         "PASS_CRITERIA, PASS_LOGIC, or EXAMPLES — say 'rewrite the description to detect...' or "
         "'change the evaluation to require...' instead."
         + (" If the fix is on the trigger side, say 'rewrite the trigger description to...' instead."
-           if is_dynamic else "")
+           if is_dynamic else
+           " If the fix is on the CONDITION/EXCEPTION gate, say 'rewrite the CONDITION/EXCEPTION "
+           "section to...' instead." if is_v2 else "")
         + ">"
     )
 

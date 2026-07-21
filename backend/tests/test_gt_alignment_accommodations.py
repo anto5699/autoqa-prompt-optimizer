@@ -301,7 +301,7 @@ def test_collect_error_cases_surfaces_trigger_side_for_dynamic_rules():
     conversations_by_id = {cid: {"transcript": []} for cid in ground_truth_map}
 
     cases = _collect_error_cases(
-        "r1", predictions, ground_truth_map, conversations_by_id, is_dynamic=True
+        "r1", predictions, ground_truth_map, conversations_by_id, keep_na_cases=True
     )
     by_conv = {c["ground_truth"] + "|" + c["prediction"]: c["error_type"] for c in cases}
 
@@ -318,10 +318,48 @@ def test_collect_error_cases_still_excludes_na_for_static_rules():
     conversations_by_id = {cid: {"transcript": []} for cid in ground_truth_map}
 
     cases = _collect_error_cases(
-        "r1", predictions, ground_truth_map, conversations_by_id, is_dynamic=False
+        "r1", predictions, ground_truth_map, conversations_by_id, keep_na_cases=False
     )
     assert len(cases) == 1
     assert cases[0]["ground_truth"] == "Yes"
+
+
+def test_gt_alignment_audit_keeps_na_cases_for_v2_rules(monkeypatch):
+    # V2 rules never get rule_type="dynamic" (always "answer") — NA-retention must key off
+    # version=="v2" too, or a V2 rule's CONDITION/EXCEPTION gate failures go invisible.
+    import agents.nodes.gt_alignment_audit as mod
+
+    rec = _flat_record(audit_iteration=None, history_len=3)
+    rec["version"] = "v2"
+    rec["current_predictions"] = {"c1": "Yes", "c2": "Yes"}
+
+    conv1 = {"conversation_id": "c1", "transcript": [{"speaker": "agent", "msg": "hi"}]}
+    conv2 = {"conversation_id": "c2", "transcript": [{"speaker": "agent", "msg": "hi"}]}
+    state = {
+        "session_id": "v2-na-test", "current_iteration": 5,
+        "parameters_below_target": ["r1"], "parameters_meeting_target": [],
+        "parameter_records": {"r1": rec},
+        # c1: GT=NA (CONDITION not met / EXCEPTION applied) but predicted Yes -> gate over-fire,
+        # must survive as evidence. c2: GT=Yes, predicted Yes -> correct, not an error case.
+        "ground_truth_map": {"c1": {"r1": "NA"}, "c2": {"r1": "Yes"}},
+        "conversations": [conv1, conv2], "llm_config": {"model": "x"},
+    }
+
+    captured = {}
+
+    async def fake_audit(rule_id, record, correct_cases, error_cases, llm):
+        captured["error_cases"] = error_cases
+        return "Gap type: NO_GAP\nAlignment gaps: None.\nRevised optimization strategy: No changes needed."
+
+    monkeypatch.setattr(mod, "_run_audit", fake_audit)
+    monkeypatch.setattr(mod, "get_llm", lambda **k: type("L", (), {"model_name": "x"})())
+    session_store.add("v2-na-test", {"progress_log": []})
+
+    asyncio.run(mod.gt_alignment_audit(state))
+
+    assert len(captured["error_cases"]) == 1
+    assert captured["error_cases"][0]["ground_truth"] == "NA"
+    assert captured["error_cases"][0]["error_type"] == "trigger_overfire"
 
 
 # ─────── Bug fix: NameError on stagnant-rule clarifying question generation ───────

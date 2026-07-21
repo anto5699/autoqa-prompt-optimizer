@@ -20,25 +20,33 @@ _LABEL_MAP = {
 }
 
 _JUDGE_SYSTEM = (
-    "You are a QA ground-truth auditor. For each rule, decide the CORRECT label for this "
+    "You are a QA ground-truth auditor. For each rule, decide the CORRECT judgment for this "
     "conversation strictly according to the rule's own definition — not what a human "
-    "reviewer might have labelled it. Labels:\n"
-    "  Yes  = the agent adhered (answer criterion met, and the scenario is in scope)\n"
-    "  No   = the agent did NOT adhere (answer criterion not met, scenario in scope)\n"
-    "  NA   = the rule does not apply to this conversation (its trigger/scope condition "
-    "is not present)\n\n"
-    "For DYNAMIC rules (with a trigger definition): first decide whether the trigger/scope "
-    "condition is present. If it is NOT present, the label is NA regardless of agent behaviour. "
-    "Only when the trigger IS present do you judge Yes vs No from the answer definition.\n"
-    "For STATIC rules (no trigger): judge Yes vs No from the definition; use NA only if the "
-    "rule is genuinely inapplicable to the conversation.\n\n"
+    "reviewer might have labelled it. Never compute or state a final Yes/No/NA label yourself — "
+    "only report the booleans below plus a reason; the label is derived from your booleans "
+    "downstream.\n\n"
+    "For V1 DYNAMIC rules (with a trigger definition): set trigger_present to true or false — "
+    "whether the trigger/scope condition is present in this conversation. If false, the rule "
+    "does not apply and answer_met is irrelevant (leave it null). Only if trigger_present is "
+    "true do you also set answer_met: true if the agent's response meets the answer definition, "
+    "false if it does not.\n"
+    "For V1 STATIC rules (no trigger definition given): leave trigger_present null, and always "
+    "set answer_met: true or false from the definition.\n\n"
+    "For V2 unified rules (description has CONDITION / EXPECTED BEHAVIOR / PROHIBITED (optional) "
+    "/ EXCEPTION sections), evaluate in this exact order and report all four fields:\n"
+    "  1. exception_present: true if any EXCEPTION item is satisfied (evaluation is impossible), "
+    "else false. 'None.' in the EXCEPTION section always means false.\n"
+    "  2. prohibited_observed: true if the evaluated speaker performed any PROHIBITED action, "
+    "else false. If the rule has no PROHIBITED section, always set this to false.\n"
+    "  3. condition_met: true if CONDITION is satisfied ('Always.' is always satisfied), else "
+    "false.\n"
+    "  4. expected_behavior_met: true if EXPECTED BEHAVIOR was fully satisfied by the evaluated "
+    "speaker, else false. Judge this even if you expect exception/prohibited/condition to "
+    "override it downstream — always report your honest assessment of all four fields.\n"
+    "Leave trigger_present and answer_met null for V2 rules.\n\n"
     "Judge only from explicit content in the transcript text. Do not infer tone, prosody, or "
-    "off-transcript actions. Write your reason FIRST, then derive should_be as the direct, "
-    "literal consequence of that reason — should_be must never contradict the reason. For "
-    "DYNAMIC rules, the reason must state, in order: (1) whether the trigger is present, and "
-    "(2) if present, whether the answer definition is met; should_be follows directly from (2), "
-    "or is NA if (1) is absent. Give a one-sentence reason (max 35 words) that PARAPHRASES the "
-    "evidence — never quote the transcript verbatim."
+    "off-transcript actions. Give a one-sentence reason (max 40 words) that PARAPHRASES the "
+    "evidence for your decision — never quote the transcript verbatim."
 )
 
 _SYNTH_SYSTEM = (
@@ -58,6 +66,72 @@ _SYNTH_SYSTEM = (
 
 def _normalize_label(value) -> str:
     return _LABEL_MAP.get(str(value or "").strip().lower(), "NA")
+
+
+def _to_bool(value):
+    """Coerce a JSON boolean or its string/None variants. Returns None if unparseable."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "yes", "y"):
+            return True
+        if s in ("false", "no", "n"):
+            return False
+    return None
+
+
+def _derive_should_be(is_dynamic: bool, obj: dict) -> str | None:
+    """Compute the definition-correct label from independent trigger/answer booleans.
+
+    The LLM is never trusted to emit the final Yes/No/NA token directly — that token is
+    the one place a single free-text generation could contradict its own reasoning. Instead
+    we derive it in code from two separately-judged booleans. Returns None when the model's
+    output can't support a derivation (caller should drop the case rather than guess).
+    """
+    if is_dynamic:
+        trigger_present = _to_bool(obj.get("trigger_present"))
+        if trigger_present is False:
+            return "NA"
+        if trigger_present is True:
+            answer_met = _to_bool(obj.get("answer_met"))
+            if answer_met is True:
+                return "Yes"
+            if answer_met is False:
+                return "No"
+        return None
+    answer_met = _to_bool(obj.get("answer_met"))
+    if answer_met is True:
+        return "Yes"
+    if answer_met is False:
+        return "No"
+    return None
+
+
+def _derive_should_be_v2(obj: dict) -> str | None:
+    """V2 unified-rule derivation, mirroring the production evaluator's own decision order
+    (backend/config.py DEFAULT_SYSTEM_PROMPT_V2 "DECISION LOGIC"): EXCEPTION, then PROHIBITED,
+    then CONDITION, then EXPECTED BEHAVIOR. Returns None when a required field is missing.
+    """
+    exception_present = _to_bool(obj.get("exception_present"))
+    if exception_present is None:
+        return None
+    if exception_present:
+        return "NA"
+    prohibited_observed = _to_bool(obj.get("prohibited_observed"))
+    if prohibited_observed:
+        return "No"
+    condition_met = _to_bool(obj.get("condition_met"))
+    if condition_met is None:
+        return None
+    if not condition_met:
+        return "NA"
+    expected_behavior_met = _to_bool(obj.get("expected_behavior_met"))
+    if expected_behavior_met is True:
+        return "Yes"
+    if expected_behavior_met is False:
+        return "No"
+    return None
 
 
 def diff_cases(
@@ -154,6 +228,13 @@ def _format_transcript(messages: list) -> str:
 def _rule_definition_block(rule: dict) -> str:
     """Human-readable definition for one rule, used inside the judgement prompt."""
     rule_id = rule["rule_id"]
+    if rule.get("version") == "v2":
+        return (
+            f"Rule ID: {rule_id}\n"
+            "Type: V2 unified rule (CONDITION / EXPECTED BEHAVIOR / PROHIBITED (optional) / "
+            "EXCEPTION embedded below)\n"
+            f"Description:\n{rule.get('description', '')}"
+        )
     is_dynamic = rule.get("rule_type") == "dynamic"
     lines = [
         f"Rule ID: {rule_id}",
@@ -253,12 +334,15 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
         prompt = (
             f"Conversation transcript:\n{_format_transcript(conv.get('transcript', []))}\n\n"
             f"Rules to judge:\n{definitions_block}\n\n"
-            "For EACH rule, return the correct label per its definition. Write the reason first, "
-            "then derive should_be from that reason — should_be must be the logical consequence "
-            "of reason, never the opposite of what reason argues.\n"
+            "For EACH rule, report the fields relevant to its type (V1 dynamic: trigger_present "
+            "+ answer_met; V1 static: answer_met only; V2 unified: exception_present, "
+            "prohibited_observed, condition_met, expected_behavior_met), plus a one-sentence "
+            "reason. Leave irrelevant fields null.\n"
             "Respond with ONLY a JSON array, one object per rule:\n"
-            '[{"rule_id": "<id>", "reason": "<paraphrased, max 35 words>", '
-            '"should_be": "Yes|No|NA — must follow directly from reason"}]'
+            '[{"rule_id": "<id>", "trigger_present": true|false|null, '
+            '"answer_met": true|false|null, "exception_present": true|false|null, '
+            '"prohibited_observed": true|false|null, "condition_met": true|false|null, '
+            '"expected_behavior_met": true|false|null, "reason": "<paraphrased, max 40 words>"}]'
         )
         try:
             async with sem:
@@ -270,6 +354,18 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
                     timeout=settings.llm_call_timeout,
                 )
             verdicts = _parse_verdicts(response.content, rule_ids)
+            for rule_id in list(verdicts.keys()):
+                obj = verdicts[rule_id]
+                rule = rules_by_id.get(rule_id, {})
+                if rule.get("version") == "v2":
+                    derived = _derive_should_be_v2(obj)
+                else:
+                    derived = _derive_should_be(rule.get("rule_type") == "dynamic", obj)
+                if derived is None:
+                    # Model didn't supply enough to derive a label — drop rather than guess.
+                    del verdicts[rule_id]
+                    continue
+                obj["should_be"] = derived
         except Exception as exc:  # noqa: BLE001 — audit must not crash the run
             logger.warning("session=%s conversation audit failed (%s) — skipping", session_id, type(exc).__name__)
             verdicts = {}

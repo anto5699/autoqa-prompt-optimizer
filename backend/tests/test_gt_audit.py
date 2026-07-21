@@ -1,7 +1,65 @@
 """Unit tests for the pre-flight ground-truth audit: diff/aggregate + non-destructive relabel."""
 
 from agents.nodes.ambiguity_detection import _apply_gt_relabels
-from agents.nodes.pre_flight_gt_audit import _normalize_label, diff_cases
+from agents.nodes.pre_flight_gt_audit import _derive_should_be_v2, _normalize_label, diff_cases
+
+
+def test_derive_should_be_v2_exception_wins_over_everything():
+    obj = {
+        "exception_present": True, "prohibited_observed": True,
+        "condition_met": True, "expected_behavior_met": True,
+    }
+    assert _derive_should_be_v2(obj) == "NA"
+
+
+def test_derive_should_be_v2_prohibited_beats_condition_not_met():
+    # Mirrors config.py's DECISION LOGIC order: PROHIBITED is checked before CONDITION.
+    obj = {
+        "exception_present": False, "prohibited_observed": True,
+        "condition_met": False, "expected_behavior_met": None,
+    }
+    assert _derive_should_be_v2(obj) == "No"
+
+
+def test_derive_should_be_v2_condition_not_met_is_na():
+    obj = {
+        "exception_present": False, "prohibited_observed": False,
+        "condition_met": False, "expected_behavior_met": None,
+    }
+    assert _derive_should_be_v2(obj) == "NA"
+
+
+def test_derive_should_be_v2_condition_met_expected_behavior_yes():
+    obj = {
+        "exception_present": False, "prohibited_observed": False,
+        "condition_met": True, "expected_behavior_met": True,
+    }
+    assert _derive_should_be_v2(obj) == "Yes"
+
+
+def test_derive_should_be_v2_condition_met_expected_behavior_no():
+    obj = {
+        "exception_present": False, "prohibited_observed": False,
+        "condition_met": True, "expected_behavior_met": False,
+    }
+    assert _derive_should_be_v2(obj) == "No"
+
+
+def test_derive_should_be_v2_missing_prohibited_defaults_to_not_observed():
+    # No PROHIBITED section in the rule → model reports null, must not block derivation.
+    obj = {
+        "exception_present": False, "prohibited_observed": None,
+        "condition_met": True, "expected_behavior_met": True,
+    }
+    assert _derive_should_be_v2(obj) == "Yes"
+
+
+def test_derive_should_be_v2_missing_required_fields_return_none():
+    assert _derive_should_be_v2({"exception_present": None}) is None
+    assert _derive_should_be_v2({"exception_present": False, "condition_met": None}) is None
+    assert _derive_should_be_v2({
+        "exception_present": False, "condition_met": True, "expected_behavior_met": None,
+    }) is None
 
 
 def test_normalize_label_variants():

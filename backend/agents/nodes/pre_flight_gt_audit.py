@@ -33,7 +33,11 @@ _JUDGE_SYSTEM = (
     "For STATIC rules (no trigger): judge Yes vs No from the definition; use NA only if the "
     "rule is genuinely inapplicable to the conversation.\n\n"
     "Judge only from explicit content in the transcript text. Do not infer tone, prosody, or "
-    "off-transcript actions. Give a one-sentence reason (max 25 words) that PARAPHRASES the "
+    "off-transcript actions. Write your reason FIRST, then derive should_be as the direct, "
+    "literal consequence of that reason — should_be must never contradict the reason. For "
+    "DYNAMIC rules, the reason must state, in order: (1) whether the trigger is present, and "
+    "(2) if present, whether the answer definition is met; should_be follows directly from (2), "
+    "or is NA if (1) is absent. Give a one-sentence reason (max 35 words) that PARAPHRASES the "
     "evidence — never quote the transcript verbatim."
 )
 
@@ -249,9 +253,12 @@ async def pre_flight_gt_audit(state: OptimizationState) -> dict:
         prompt = (
             f"Conversation transcript:\n{_format_transcript(conv.get('transcript', []))}\n\n"
             f"Rules to judge:\n{definitions_block}\n\n"
-            "For EACH rule, return the correct label per its definition. "
+            "For EACH rule, return the correct label per its definition. Write the reason first, "
+            "then derive should_be from that reason — should_be must be the logical consequence "
+            "of reason, never the opposite of what reason argues.\n"
             "Respond with ONLY a JSON array, one object per rule:\n"
-            '[{"rule_id": "<id>", "should_be": "Yes|No|NA", "reason": "<paraphrased, max 25 words>"}]'
+            '[{"rule_id": "<id>", "reason": "<paraphrased, max 35 words>", '
+            '"should_be": "Yes|No|NA — must follow directly from reason"}]'
         )
         try:
             async with sem:

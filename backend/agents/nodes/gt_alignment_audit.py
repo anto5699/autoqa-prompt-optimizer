@@ -121,8 +121,9 @@ async def gt_alignment_audit(state: OptimizationState) -> dict:
         session_store.append_log(session_id, f"  GT audit: {rule_id}…")
 
         predictions = record["current_predictions"]
+        is_dynamic = record.get("rule_type") == "dynamic"
         correct_cases = _collect_correct_cases(rule_id, predictions, ground_truth_map, conversations_by_id)
-        error_cases = _collect_error_cases(rule_id, predictions, ground_truth_map, conversations_by_id)
+        error_cases = _collect_error_cases(rule_id, predictions, ground_truth_map, conversations_by_id, is_dynamic=is_dynamic)
 
         findings = await _run_audit(rule_id, record, correct_cases, error_cases, llm)
         updated = {**record, "alignment_audit": findings, "audit_iteration": iteration}
@@ -192,22 +193,45 @@ def _collect_error_cases(
     predictions: dict,
     ground_truth_map: dict,
     conversations_by_id: dict,
+    is_dynamic: bool = False,
 ) -> list[dict]:
+    """Collect misclassified cases as evidence for the alignment audit.
+
+    For dynamic (By Question) rules, GT=NA rows are NOT skipped: a prediction that
+    disagrees with GT=NA is a trigger over-fire, and GT=Yes/No with a NA prediction is a
+    missed trigger — both are genuine trigger-side failures the audit must be able to see,
+    not just answer-side (Yes vs No) misclassification. Static rules keep the original
+    behaviour (NA is genuinely inapplicable, there is no trigger condition to recover).
+    """
     cases = []
     for conv_id, gt_by_rule in ground_truth_map.items():
         gt = gt_by_rule.get(rule_id)
-        if gt is None or gt == "NA":
+        if gt is None:
+            continue
+        if gt == "NA" and not is_dynamic:
             continue
         pred = predictions.get(conv_id, "No")
-        if pred != gt:
-            conv = conversations_by_id.get(conv_id, {})
-            cases.append({
-                "ground_truth": gt,
-                "prediction": pred,
-                "transcript": conv.get("transcript", []),
-            })
-            if len(cases) >= _MAX_ERROR_CASES:
-                break
+        if pred == gt:
+            continue
+        conv = conversations_by_id.get(conv_id, {})
+        if gt == "NA":
+            error_type = "trigger_overfire"
+        elif pred == "NA":
+            error_type = "missed_trigger"
+        elif pred == "Yes":
+            error_type = "false_positive"
+        elif pred == "No":
+            error_type = "false_negative"
+        else:
+            continue
+        cases.append({
+            "ground_truth": gt,
+            "prediction": pred,
+            "error_type": error_type,
+            "transcript": conv.get("transcript", []),
+        })
+        if len(cases) >= _MAX_ERROR_CASES:
+            break
     return cases
 
 
@@ -231,6 +255,26 @@ async def _run_audit(
 ) -> str:
     history = record.get("iteration_history", [])
     trajectory = " → ".join(f"{h['accuracy']:.0%}" for h in history) if history else "no history"
+    is_dynamic = record.get("rule_type") == "dynamic"
+
+    if is_dynamic:
+        trigger_desc = record.get("trigger_description") or "(none)"
+        description_section = (
+            f"Trigger description (detects whether the scenario applies — speaker: "
+            f"{record.get('trigger_speaker', 'customer')}):\n{trigger_desc}\n\n"
+            f"Answer description (evaluates agent adherence when the scenario is present — "
+            f"speaker: {record['speaker']}):\n{record['current_description']}\n\n"
+        )
+        attribution_ask = (
+            "Identify whether the failure is in the trigger condition (failing to detect the scenario, "
+            "OR firing when the scenario is absent — over-firing), the answer condition (misclassifying "
+            "adherence when the scenario is present), or both. For trigger over-fire or missed-trigger "
+            "cases, state clearly that the TRIGGER description — not the answer description — needs to "
+            "change.\n\n"
+        )
+    else:
+        description_section = f"Current description:\n{record['current_description']}\n\n"
+        attribution_ask = ""
 
     correct_text = "\n\n".join(
         f"[C{i + 1}] GT={c['ground_truth']} (correct)\n"
@@ -239,8 +283,9 @@ async def _run_audit(
     ) or "No correctly classified cases available."
 
     error_text = "\n\n".join(
-        f"[E{i + 1}] GT={e['ground_truth']} | Predicted={e['prediction']}\n"
-        f"Transcript:\n{_format_transcript(e['transcript'])}"
+        f"[E{i + 1}] GT={e['ground_truth']} | Predicted={e['prediction']}"
+        + (f" | Type={e['error_type'].replace('_', ' ')}" if is_dynamic and e.get("error_type") else "")
+        + f"\nTranscript:\n{_format_transcript(e['transcript'])}"
         for i, e in enumerate(error_cases)
     ) or "No error cases available."
 
@@ -248,12 +293,13 @@ async def _run_audit(
         f"Rule ID: {rule_id}\n"
         f"Rule type: {record['rule_type']} | Speaker: {record['speaker']} | "
         f"Evaluation type: {record['evaluation_type']}\n\n"
-        f"Current description:\n{record['current_description']}\n\n"
+        f"{description_section}"
         f"Accuracy trajectory: {trajectory}\n"
         f"This rule has been stagnant — multiple description rewrites have not improved accuracy.\n\n"
         f"Correctly classified examples — what the ground truth expects to pass or fail:\n{correct_text}\n\n"
         f"Persistently misclassified examples — cases that keep being evaluated wrongly:\n{error_text}\n\n"
         "Analyse the gap between what the description evaluates and what ground truth actually rewards.\n"
+        f"{attribution_ask}"
         "Look for: (a) behaviours the GT marks as correct that the description cannot detect from "
         "transcript text alone, (b) cases where similar transcripts have opposite GT labels suggesting "
         "a labelling inconsistency, (c) implicit signals the description treats as absent that GT "
@@ -269,7 +315,10 @@ async def _run_audit(
         "<One concrete instruction for how the description must change — describe the evaluation "
         "behaviour that needs to change in plain English. Do not use internal format terms like "
         "PASS_CRITERIA, PASS_LOGIC, or EXAMPLES — say 'rewrite the description to detect...' or "
-        "'change the evaluation to require...' instead.>"
+        "'change the evaluation to require...' instead."
+        + (" If the fix is on the trigger side, say 'rewrite the trigger description to...' instead."
+           if is_dynamic else "")
+        + ">"
     )
 
     response = await llm.ainvoke([

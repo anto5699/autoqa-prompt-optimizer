@@ -209,7 +209,7 @@ async def _maybe_generate_question(
     active_system_prompt = system_prompt_v2 if record.get("version") == "v2" else system_prompt
     trajectory = _accuracy_trajectory(record)
     stagnancy_note = (
-        f"  (stagnant — {_STAGNANT_MIN_ENTRIES}+ identical iterations)"
+        f"  (stagnant — {settings.stagnation_window}+ identical iterations)"
         if _is_stagnant(record) else ""
     )
     trajectory_line = f"Accuracy trajectory: {trajectory}{stagnancy_note}\n" if trajectory else ""

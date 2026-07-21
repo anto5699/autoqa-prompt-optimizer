@@ -9,7 +9,8 @@ import asyncio
 import pytest
 
 from agents.nodes.benchmarking import _iters_without_improvement, benchmarking
-from agents.nodes.gt_alignment_audit import _no_progress
+from agents.nodes.gt_alignment_audit import _collect_error_cases, _no_progress
+from agents.nodes.mid_loop_clarification import _maybe_generate_question
 from agents.nodes.pre_flight_gt_audit import _consensus_verdicts, diff_cases
 from config import settings
 from utils.accuracy_metrics import compute_metrics, wilson_interval
@@ -286,3 +287,68 @@ def test_description_mismatch_does_not_halt(monkeypatch):
     r = result["parameter_records"]["r1"]
     assert r["status"] != "label_limited"
     assert "parameters_below_target" not in result
+
+
+# ─────────── Bug fix: dynamic rules must surface trigger-side errors ───────────
+
+def test_collect_error_cases_surfaces_trigger_side_for_dynamic_rules():
+    # GT=NA/pred=Yes -> trigger over-fire; GT=Yes/pred=NA -> missed trigger. Previously both
+    # were silently dropped because gt == "NA" short-circuited before pred was even compared.
+    ground_truth_map = {
+        "c1": {"r1": "NA"}, "c2": {"r1": "Yes"}, "c3": {"r1": "No"}, "c4": {"r1": "Yes"},
+    }
+    predictions = {"c1": "Yes", "c2": "NA", "c3": "No", "c4": "No"}
+    conversations_by_id = {cid: {"transcript": []} for cid in ground_truth_map}
+
+    cases = _collect_error_cases(
+        "r1", predictions, ground_truth_map, conversations_by_id, is_dynamic=True
+    )
+    by_conv = {c["ground_truth"] + "|" + c["prediction"]: c["error_type"] for c in cases}
+
+    assert by_conv["NA|Yes"] == "trigger_overfire"
+    assert by_conv["Yes|NA"] == "missed_trigger"
+    assert by_conv["Yes|No"] == "false_negative"
+    assert len(cases) == 3  # c3 (No/No) is correct, excluded
+
+
+def test_collect_error_cases_still_excludes_na_for_static_rules():
+    # Static rules: NA is genuinely inapplicable, not a recoverable trigger — unchanged behaviour.
+    ground_truth_map = {"c1": {"r1": "NA"}, "c2": {"r1": "Yes"}}
+    predictions = {"c1": "Yes", "c2": "No"}
+    conversations_by_id = {cid: {"transcript": []} for cid in ground_truth_map}
+
+    cases = _collect_error_cases(
+        "r1", predictions, ground_truth_map, conversations_by_id, is_dynamic=False
+    )
+    assert len(cases) == 1
+    assert cases[0]["ground_truth"] == "Yes"
+
+
+# ─────── Bug fix: NameError on stagnant-rule clarifying question generation ───────
+
+def test_maybe_generate_question_does_not_crash_when_stagnant(monkeypatch):
+    # Regression test for `_STAGNANT_MIN_ENTRIES` — an undefined name that crashed every run
+    # the moment a rule went stagnant with RCA findings available (mid_loop_clarification.py:212).
+    record = {
+        "rule_type": "answer", "speaker": "Agent", "current_description": "d",
+        "best_accuracy": 0.5, "initial_accuracy": 0.5, "current_accuracy": 0.5,
+        "iteration_history": [{"accuracy": 0.5} for _ in range(settings.stagnation_window)],
+    }
+    assert _is_stagnant_helper(record) is True  # sanity: this record IS stagnant
+
+    class _FakeLLM:
+        async def ainvoke(self, _messages):
+            class _R:
+                content = '{"needs_clarification": false, "question_text": "", "rationale": ""}'
+            return _R()
+
+    question = asyncio.run(_maybe_generate_question(
+        "r1", record, "RCA findings text", iteration=4, max_iterations=10,
+        session_id="stagnancy-note-test", system_prompt="sys", llm=_FakeLLM(),
+    ))
+    assert question is None  # needs_clarification=false → no question, but no crash either
+
+
+def _is_stagnant_helper(record):
+    from agents.nodes.mid_loop_clarification import _is_stagnant
+    return _is_stagnant(record)

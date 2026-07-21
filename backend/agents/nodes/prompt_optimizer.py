@@ -186,7 +186,7 @@ async def prompt_optimizer(state: OptimizationState) -> dict:
                 "current_description": record.get("trigger_description") or "",
                 "speaker": record.get("trigger_speaker") or "customer",
             }
-            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id, pivot_approved=False, accuracy_target=accuracy_target)
+            new_trigger_description = await _optimise_description(trigger_record, rule_answers, llm, session_id, pivot_approved=pivot_approved, accuracy_target=accuracy_target)
             new_description = await _optimise_description(record, rule_answers, llm, session_id, pivot_approved=pivot_approved, accuracy_target=accuracy_target)
             records[rule_id] = {
                 **record,
